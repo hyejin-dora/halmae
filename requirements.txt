@@ -18,7 +18,7 @@ korean-lunar-calendar>=0.3  # saju.py       ─ import korean_lunar_calendar
 # --- 점성술 ------------------------------------------------------
 geopy>=2.4                  # astrology.py  ─ 출생지역 이름 → 위도·경도 (인터넷 필요)
 timezonefinder>=6.5         # astrology.py  ─ 위도·경도 → 시간대 이름 (오프라인)
-pyswisseph>=2.10            # astrology.py  ─ import swisseph · 태양/달/Ascendant
+pyswisseph>=2.10.3.2            # astrology.py  ─ import swisseph · 태양/달/Ascendant
 
 # --- 데이터 저장 --------------------------------------------------
 supabase>=2.0               # db.py         ─ events · feedback · cards
