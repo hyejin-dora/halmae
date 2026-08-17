@@ -1,0 +1,37 @@
+# 할매 · Streamlit 기본 테마
+#
+# theme.py 의 CSS 는 우리가 만든 요소를 꾸미지만,
+# 달력 팝업이나 선택 상자 목록처럼 Streamlit 이 직접 그리는 부분은
+# 여기 값을 따릅니다. 두 곳의 색을 맞춰두어야 화면이 따로 놀지 않습니다.
+#
+# 값은 theme.py 의 TOKENS 와 같은 색입니다.
+
+[theme]
+base = "dark"
+primaryColor = "#D2A62E"             # gold
+backgroundColor = "#170D12"          # bg_base
+secondaryBackgroundColor = "#241419" # bg_panel
+textColor = "#F8EFDC"                # ivory
+
+# ---------------------------------------------------------------
+#  붓글씨 폰트를 여기서 미리 불러옵니다
+#
+#  왜 여기냐면:
+#  st.markdown 으로 <link> 를 넣으면 화면이 이미 그려진 뒤에 폰트가 도착해서,
+#  첫 화면 "할매" 가 대체 서체로 그려진 채 바뀌지 않는 문제가 있었습니다.
+#  (브라우저가 실제로 쓴 폰트를 확인해보니 Noto Sans KR 이었습니다.)
+#  [[theme.fontFaces]] 로 선언하면 Streamlit 이 화면을 그리기 전에
+#  <head> 에 넣어주기 때문에 이 문제가 생기지 않습니다.
+#
+#  주소는 Google Fonts 가 한글을 잘게 쪼개 놓은 조각 중
+#  '할'(U+D560)·'매'(U+B9E4) 가 들어 있는 117번 조각입니다.
+#  (붓글씨는 타이틀 "할매" 에만 쓰므로 이 조각 하나면 충분합니다.)
+#
+#  혹시 이 주소가 바뀌어 폰트를 못 불러오면
+#  타이틀은 Gowun Batang(명조) 으로 얌전히 대체됩니다. 화면은 깨지지 않습니다.
+# ---------------------------------------------------------------
+[[theme.fontFaces]]
+family = "Nanum Brush Script"
+url = "https://fonts.gstatic.com/s/nanumbrushscript/v26/wXK2E2wfpokopxzthSqPbcR5_gVaxazyi8h91FzOgw1p2ltl6Y9TO0Bmgx_e.117.woff2"
+weight = "400"
+style = "normal"

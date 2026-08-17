@@ -1,0 +1,31 @@
+# 할매 앱이 실제로 import 하는 패키지만 적었습니다.
+# (파이썬에 기본으로 들어 있는 csv · json · hashlib · zoneinfo 등은 적지 않습니다.)
+#
+#     pip install -r requirements.txt
+#
+# Streamlit Community Cloud 는 배포할 때 이 파일을 그대로 설치합니다.
+
+# --- 화면 --------------------------------------------------------
+streamlit>=1.40             # app.py · theme.py
+
+# --- 할매 답변 (Gemini) -------------------------------------------
+google-genai>=1.0           # halmae_ai.py  ─ from google import genai
+pydantic>=2.0               # halmae_ai.py  ─ 답변 구조(Structured Output) 정의
+
+# --- 사주 --------------------------------------------------------
+korean-lunar-calendar>=0.3  # saju.py       ─ import korean_lunar_calendar
+
+# --- 점성술 ------------------------------------------------------
+geopy>=2.4                  # astrology.py  ─ 출생지역 이름 → 위도·경도 (인터넷 필요)
+timezonefinder>=6.5         # astrology.py  ─ 위도·경도 → 시간대 이름 (오프라인)
+pyswisseph>=2.10            # astrology.py  ─ import swisseph · 태양/달/Ascendant
+
+# --- 데이터 저장 --------------------------------------------------
+supabase>=2.0               # db.py         ─ events · feedback · cards
+                            #                 열쇠는 코드가 아니라 Secrets 에서 읽습니다
+
+# --- 시간대 자료 --------------------------------------------------
+# saju.py 가 켜지자마자 ZoneInfo("Asia/Seoul") 을 부릅니다.
+# 리눅스 서버에는 보통 시간대 자료가 깔려 있지만, 없는 환경에서는 앱이 아예 뜨지 않습니다.
+# 이 패키지가 그때를 대비한 예비 자료입니다. (용량이 작아 부담이 없습니다)
+tzdata>=2024.1
