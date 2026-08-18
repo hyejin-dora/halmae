@@ -60,6 +60,7 @@ from saju import (
     compute_saju,
     compute_year_ganji,
     format_saju_for_prompt,
+    saju_facts,
     year_luck_notes,
 )
 
@@ -680,18 +681,21 @@ def render_calendar_check() -> None:
         for label, value in rows:
             st.markdown(f"**{label}**  \n{value}")
 
-        gapja = info["간지(음력 기준·참고용)"]
+        # 이 값은 명식이 아닙니다. 그래서 '년주/월주/일주'라고 부르지 않고
+        # '음력 연간지/월간지/일간지'라고 적습니다.
+        gapja = info["음력 간지(참고용)"]
         st.markdown(
-            "**간지 정보 (음력 기준 · 참고용)**  \n"
-            f"년주 {gapja['년주']['한글']}({gapja['년주']['한자']}) · "
-            f"월주 {gapja['월주']['한글']}({gapja['월주']['한자']}) · "
-            f"일주 {gapja['일주']['한글']}({gapja['일주']['한자']})"
+            "**음력 간지 (korean_lunar_calendar · 참고용 · 명식 아님)**  \n"
+            f"음력 연간지 {gapja['음력 연간지']['한글']}({gapja['음력 연간지']['한자']}) · "
+            f"음력 월간지 {gapja['음력 월간지']['한글']}({gapja['음력 월간지']['한자']}) · "
+            f"음력 일간지 {gapja['음력 일간지']['한글']}({gapja['음력 일간지']['한자']})"
         )
 
         st.caption(
             "이 간지는 korean_lunar_calendar 가 음력 기준으로 낸 값이라 "
-            "전통 사주와 년주·월주가 다를 수 있어요. "
-            "사주 계산에는 쓰지 않고, 위쪽의 '사주 네 기둥'을 절기 기준으로 따로 계산합니다."
+            "사주 명식의 년주·월주와 다릅니다. (일간지는 일주와 같습니다) "
+            "사주 계산에는 전혀 쓰지 않아요. 명식은 위쪽 '네 명식 (계산 결과)' 와 "
+            "'사주 네 기둥' 패널의 절기 기준 값이 원본입니다."
         )
 
         # 원본 dict 확인 (expander 안에는 expander를 넣을 수 없어 체크박스로)
@@ -838,6 +842,57 @@ def render_calculation_notice() -> None:
         if message and message not in seen:
             seen.append(message)
             st.warning(message)
+
+
+def render_myeongsik() -> None:
+    """확정 명식 — 파이썬이 계산한 값을 화면에 그대로 보여줍니다.
+
+    이 칸에 적히는 값은 전부 saju.compute_saju() 의 결과입니다.
+    할매(Gemini)의 답변에서 명식을 되읽어오지 않습니다.
+    할매는 이 값을 '해석'만 하고, 값 자체는 여기 적힌 것이 원본입니다.
+    """
+    saju = st.session_state.saju_info
+    if not saju:
+        return
+
+    facts = saju_facts(saju)
+
+    _section("네 명식 (계산 결과)")
+
+    pillar_cells = []
+    for name in ("년주", "월주", "일주", "시주"):
+        value = facts[name]
+        if not value:
+            value = "—"
+        pillar_cells.append(
+            f'<div class="halmae-myeongsik-cell">'
+            f'<span class="halmae-label">{name}</span>'
+            f'<span class="halmae-myeongsik-value">{_escape(value)}</span>'
+            f'</div>'
+        )
+
+    ohaeng_cells = "".join(
+        f'<div class="halmae-myeongsik-cell">'
+        f'<span class="halmae-label">{name}</span>'
+        f'<span class="halmae-myeongsik-value">{facts["오행 개수"][name]}</span>'
+        f'</div>'
+        for name in OHAENG_ORDER
+    )
+
+    day_master_line = (
+        f'<p class="halmae-fact">일간 {_escape(facts["일간"])}</p>'
+    )
+
+    foot = f'오행은 {_escape(facts["오행 기준"])} 기준으로 셌어요.'
+    if not facts["시주 계산 여부"]:
+        foot += f' {_escape(facts["시주 제외 사유"])}.'
+
+    _card(
+        f'<div class="halmae-myeongsik-row">{"".join(pillar_cells)}</div>'
+        f'{day_master_line}'
+        f'<div class="halmae-myeongsik-row">{ohaeng_cells}</div>'
+        f'<p class="halmae-card-foot">{foot}</p>'
+    )
 
 
 def ensure_reply(step: int, answers: dict) -> None:
@@ -1369,6 +1424,11 @@ def render_result() -> None:
         render_calendar_check()
     else:
         render_calculation_notice()
+
+    # --- 0-1. 확정 명식 (모든 사용자에게 보여줍니다) ------------------
+    #     여기 적히는 값은 전부 파이썬 계산 결과입니다.
+    #     할매의 답변 글에서 명식을 되읽어오지 않습니다. (계산 ≠ 해석)
+    render_myeongsik()
 
     # --- 1. 열려 있는 단계를 위에서부터 차례로 보여줍니다 -----------
     #     이미 받아둔 답변은 st.session_state.replies에 남아 있어서,

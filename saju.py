@@ -19,7 +19,12 @@
 절기는 태양의 겉보기 황경(黃經)으로 정의됩니다.
     입춘 315° · 경칩 345° · 청명 15° · 입하 45° · 망종 75° · 소서 105°
     입추 135° · 백로 165° · 한로 195° · 입동 225° · 대설 255° · 소한 285°
-황경은 Meeus 의 태양 위치 근사식으로 구합니다. (오차 약 ±10분)
+황경은 스위스 천체력(pyswisseph)으로 구합니다. 없는 환경에서는 Meeus 근사식으로
+물러납니다. 어느 쪽을 썼는지는 SOLAR_TERM_SOURCE 에 적힙니다.
+
+오행은 '표면 8자'(천간 4 + 지지 4) 만 셉니다. 지장간(支藏干)은 세지 않습니다.
+이 기준은 OHAENG_BASIS 한 곳에만 적어두고, 화면·프롬프트·테스트가 모두
+같은 값을 씁니다.
 """
 
 import math
@@ -27,6 +32,20 @@ from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from korean_lunar_calendar import KoreanLunarCalendar
+
+# 절기(節氣)는 태양의 겉보기 황경으로 정의됩니다.
+# 스위스 천체력(pyswisseph)이 있으면 그것을 씁니다. 오차가 1초 안팎이라
+# 절입 시각 근처에 태어난 사람의 월주가 뒤집히지 않습니다.
+# 없으면 아래 Meeus 근사식으로 물러납니다. (오차 약 ±12분)
+try:                                    # pragma: no cover - 환경에 따라 갈립니다
+    import swisseph as _swe
+    # FLG_MOSEPH: 별도 천체력 파일이 없어도 도는 Moshier 이론 (astrology.py 와 동일)
+    _SWE_FLAG = _swe.FLG_MOSEPH
+except Exception:                       # pragma: no cover
+    _swe = None
+    _SWE_FLAG = 0
+
+SOLAR_TERM_SOURCE = "swisseph(Moshier)" if _swe else "Meeus 근사식"
 
 # 이 패키지가 다룰 수 있는 날짜 범위 (양력 1000-02-13 ~ 2050-12-31)
 SOLAR_MIN = date(1000, 2, 13)
@@ -60,6 +79,13 @@ JIJI_OHAENG = ["수", "토", "목", "목", "토", "화", "화", "토", "금", "�
 
 # 짝수 번째가 양(陽), 홀수 번째가 음(陰)
 OHAENG_ORDER = ["목", "화", "토", "금", "수"]
+
+# 오행을 세는 기준. 이 서비스는 '표면 8자'(천간 4 + 지지 4) 하나로 통일합니다.
+#   - 지장간(지지 속에 숨은 천간)은 세지 않습니다.
+#   - 출생시간을 모르면 시주가 빠지므로 6자만 셉니다.
+# 화면·Gemini 프롬프트·테스트가 모두 이 문구를 그대로 씁니다.
+OHAENG_BASIS = "표면 8자(천간 4 + 지지 4) · 지장간 제외"
+OHAENG_BASIS_NO_HOUR = "표면 6자(천간 3 + 지지 3, 시주 제외) · 지장간 제외"
 
 # 지지에 대응하는 띠 (참고용)
 JIJI_ANIMAL = [
@@ -111,22 +137,26 @@ NO_BIRTH_TIME_NOTE = "출생시간 미입력으로 시주 해석 제외"
 #  양력 / 음력 변환  (기존 기능 그대로)
 # ===============================================================
 def _split_gapja(korean: str, chinese: str) -> dict:
-    """'기사년 정축월 병인일' + '己巳年 丁丑月 丙寅日' 을 기둥별로 나눕니다.
+    """'기사년 정축월 병인일' + '己巳年 丁丑月 丙寅日' 을 세 칸으로 나눕니다.
 
     주의: 이 값은 korean_lunar_calendar 의 '음력 기준' 간지입니다.
     사주 계산에는 쓰지 않고, 참고용으로만 보여줍니다.
+
+    그래서 이름을 '년주/월주/일주'라고 붙이지 않습니다.
+    사주의 네 기둥(compute_saju 의 '기둥')은 절기 기준이라 이 값과 다른데,
+    같은 이름을 쓰면 어느 쪽이 명식인지 헷갈리기 때문입니다.
     """
-    pillars = {}
+    gapja = {}
     korean_parts = (korean or "").split()
     chinese_parts = (chinese or "").split()
 
-    for index, name in enumerate(("년주", "월주", "일주")):
+    for index, name in enumerate(("음력 연간지", "음력 월간지", "음력 일간지")):
         # "기사년" 처럼 뒤에 붙은 년/월/일 글자는 떼어냅니다.
         ko = korean_parts[index][:-1] if index < len(korean_parts) else ""
         ch = chinese_parts[index][:-1] if index < len(chinese_parts) else ""
-        pillars[name] = {"한글": ko, "한자": ch}
+        gapja[name] = {"한글": ko, "한자": ch}
 
-    return pillars
+    return gapja
 
 
 def compute_calendar_info(
@@ -206,7 +236,7 @@ def compute_calendar_info(
         "음력 월": calendar.lunarMonth,
         "음력 일": calendar.lunarDay,
         "윤달 여부": is_leap,
-        "간지(음력 기준·참고용)": _split_gapja(gapja_korean, gapja_chinese),
+        "음력 간지(참고용)": _split_gapja(gapja_korean, gapja_chinese),
         "간지 한글": gapja_korean,
         "간지 한자": gapja_chinese,
     }
@@ -244,10 +274,19 @@ def _from_julian_day(julian_day: float) -> datetime:
 
 
 def sun_longitude(julian_day: float) -> float:
-    """태양의 겉보기 황경(도, 0~360). Meeus 근사식 · 오차 약 0.01도(≈15분).
+    """태양의 겉보기 황경(도, 0~360).
 
     이 값이 315도가 되는 순간이 입춘, 345도가 되는 순간이 경칩입니다.
+
+    스위스 천체력이 있으면 그 값을(오차 ~1초), 없으면 Meeus 근사식을(오차 ~12분)
+    씁니다. 어느 쪽을 썼는지는 SOLAR_TERM_SOURCE 에 적혀 있고, 계산 결과의
+    '절기 계산 출처' 로도 함께 내보냅니다.
     """
+    if _swe is not None:
+        # calc_ut 은 그 시점의 춘분점을 기준으로 한 겉보기 황경을 돌려줍니다.
+        # (광행차·장동 보정이 이미 들어 있어 절기 정의와 그대로 맞습니다)
+        return _swe.calc_ut(julian_day, _swe.SUN, _SWE_FLAG)[0][0] % 360.0
+
     t = (julian_day - 2451545.0) / 36525.0
 
     # 태양의 기하 평균 황경
@@ -346,14 +385,40 @@ def _day_pillar_index(day: date) -> int:
     return (julian_day_number + 49) % 60
 
 
-def _count_ohaeng(pillars: dict) -> dict:
-    """네 기둥의 천간·지지를 모두 세어 오행 개수를 냅니다."""
-    counts = {name: 0 for name in OHAENG_ORDER}
-    for pillar in pillars.values():
+def ohaeng_breakdown(pillars: dict) -> list[dict]:
+    """오행을 어떻게 세었는지 글자 하나씩 펼쳐 보여줍니다.
+
+    [{"기둥": "일주", "자리": "천간", "글자": "갑", "한자": "甲", "오행": "목"}, ...]
+
+    합계가 왜 그렇게 나왔는지 사람이 눈으로 따라갈 수 있게 하려고 만들었습니다.
+    세는 기준은 OHAENG_BASIS — 표면 8자만, 지장간은 세지 않습니다.
+    """
+    rows: list[dict] = []
+    for pillar_name in ("년주", "월주", "일주", "시주"):
+        pillar = pillars.get(pillar_name)
         if not pillar:
             continue
-        counts[pillar["천간"]["오행"]] += 1
-        counts[pillar["지지"]["오행"]] += 1
+        for slot in ("천간", "지지"):
+            part = pillar[slot]
+            rows.append({
+                "기둥": pillar_name,
+                "자리": slot,
+                "글자": part["한글"],
+                "한자": part["한자"],
+                "오행": part["오행"],
+            })
+    return rows
+
+
+def _count_ohaeng(pillars: dict) -> dict:
+    """네 기둥의 천간·지지를 모두 세어 오행 개수를 냅니다.
+
+    기준은 OHAENG_BASIS 하나뿐입니다 — 표면 8자(천간 4 + 지지 4).
+    지장간은 세지 않습니다. 시주가 없으면 6자만 셉니다.
+    """
+    counts = {name: 0 for name in OHAENG_ORDER}
+    for row in ohaeng_breakdown(pillars):
+        counts[row["오행"]] += 1
     return counts
 
 
@@ -522,8 +587,17 @@ def compute_saju(
         "일주": day_pillar,
         "시주": hour_pillar,
     }
+    breakdown = ohaeng_breakdown(pillars)
     ohaeng = _count_ohaeng(pillars)
     counted = 8 if has_time else 6
+
+    # 세는 기준과 실제로 센 글자 수가 어긋나면 계산이 깨진 것입니다.
+    # 조용히 틀린 값을 내보내느니 여기서 멈추는 편이 낫습니다.
+    if len(breakdown) != counted or sum(ohaeng.values()) != counted:
+        raise CalendarError(
+            "오행을 세는 중 값이 어긋났어요. (개발자 확인 필요: "
+            f"글자 {len(breakdown)}개 · 합계 {sum(ohaeng.values())} · 기대 {counted})"
+        )
 
     return {
         # --- 기둥 ---
@@ -540,6 +614,8 @@ def compute_saju(
         "오행 분포": ohaeng,
         "오행 요약": " / ".join(f"{k} {ohaeng[k]}" for k in OHAENG_ORDER),
         "오행 글자수": counted,
+        "오행 기준": OHAENG_BASIS if has_time else OHAENG_BASIS_NO_HOUR,
+        "오행 근거": breakdown,          # 글자 하나씩 → 어떤 오행으로 셌는지
         "일간": day_pillar["천간"],          # 사주 해석의 중심이 되는 글자
         # --- 계산 근거 ---
         "양력 날짜": solar_date,
@@ -555,6 +631,7 @@ def compute_saju(
         },
         "입춘 시각": f"{ipchun_moment:%Y-%m-%d %H:%M} KST",
         "사주 기준 연도": saju_year,
+        "절기 계산 출처": SOLAR_TERM_SOURCE,
         "달력 정보": calendar_info,
         "주의사항": notes,
     }
@@ -648,15 +725,68 @@ def _lookup_longitude(place: str | None) -> float | None:
 
 
 # ===============================================================
+#  하나의 진실 (single source of truth)
+#
+#  화면·프롬프트·테스트가 서로 다른 값을 보면 안 되므로,
+#  바깥에서 쓸 명식 값은 전부 이 함수 하나를 거쳐 나갑니다.
+#  Gemini 가 만든 글에서 명식 값을 되읽어오는 일은 절대 없습니다.
+# ===============================================================
+def saju_facts(saju: dict) -> dict:
+    """화면과 프롬프트가 함께 쓸 '확정 명식' 한 덩어리.
+
+    여기 담긴 값이 이 서비스의 사주 원본입니다.
+    Gemini 응답에서 명식을 다시 읽어오지 않습니다.
+    """
+    def pillar_text(name: str) -> str:
+        pillar = saju["기둥"][name]
+        if pillar is None:
+            return ""
+        return f"{pillar['한글']}({pillar['한자']})"
+
+    ohaeng = saju["오행 분포"]
+    day_stem = saju["일간"]
+
+    return {
+        "년주": pillar_text("년주"),
+        "월주": pillar_text("월주"),
+        "일주": pillar_text("일주"),
+        "시주": pillar_text("시주"),
+        "일간": f"{day_stem['한글']}{day_stem['오행']}({day_stem['한자']})",
+        "일간 글자": day_stem["한글"],
+        "일간 오행": day_stem["오행"],
+        "오행 개수": {name: ohaeng[name] for name in OHAENG_ORDER},
+        "오행 요약": saju["오행 요약"],
+        "오행 기준": saju["오행 기준"],
+        "오행 글자수": saju["오행 글자수"],
+        "오행 근거": saju["오행 근거"],
+        "월령": f"{saju['적용 절기']['월지']} ({saju['적용 절기']['현재 구간']} 이후)",
+        "시주 계산 여부": saju["시주 계산 여부"],
+        "시주 제외 사유": saju["시주 제외 사유"],
+    }
+
+
+# ===============================================================
 #  Gemini 에 그대로 넣을 수 있는 글 (다시 계산하지 말라는 지시 포함)
 # ===============================================================
+#  Gemini 가 이 값을 고쳐 쓰지 못하게 막는 문장. 여러 곳에서 쓰므로 상수로 둡니다.
+SAJU_LOCK_HEADER = "[CALCULATED_SAJU — 확정 입력값]"
+SAJU_LOCK_RULES = """[CALCULATED_SAJU 사용 규칙 — 어기면 답변 실패로 본다]
+- 위 CALCULATED_SAJU 는 Python 에서 계산이 끝난 확정값이다.
+- 다시 계산하지 말고, 추정하지 말고, 바꾸지 말고, 그대로 해석만 하라.
+- 생년월일·출생시간을 보고 간지를 스스로 뽑아내려 하지 마라. 이미 다 주어졌다.
+- 명식 값(년주·월주·일주·시주·일간·오행 개수)을 글에 적을 때는
+  위에 적힌 글자를 그대로 옮겨 적어라. 한 글자도 바꾸지 마라.
+- 위에 없는 명식 값(대운·세운·지장간·신살 등)은 만들어내지 마라.
+- 오행 개수는 위에 적힌 숫자만 쓴다. 더하거나 빼서 새로 세지 마라."""
+
+
 def format_saju_for_prompt(saju: dict) -> str:
     """계산된 사주를 프롬프트에 붙일 수 있는 글자로 바꿉니다.
 
     Gemini 가 이 값을 다시 계산하지 않도록, 확정값이라는 점을 못 박아둡니다.
-    (프롬프트에 실제로 붙이는 일은 다음 단계에서 합니다.)
     """
-    lines = ["[사주 명식 — Python에서 계산 완료. 다시 계산하지 말고 그대로 사용할 것]"]
+    facts = saju_facts(saju)
+    lines = [SAJU_LOCK_HEADER]
 
     for name in ("년주", "월주", "일주", "시주"):
         pillar = saju["기둥"][name]
@@ -669,22 +799,33 @@ def format_saju_for_prompt(saju: dict) -> str:
             f"천간 {stem['한글']}={stem['오행']}, 지지 {branch['한글']}={branch['오행']}"
         )
 
-    ohaeng = saju["오행 분포"]
-    lines.append("")
-    lines.append(f"[오행 분포 — 총 {saju['오행 글자수']}글자]")
-    for name in OHAENG_ORDER:
-        lines.append(f"- {name}: {ohaeng[name]}")
+    lines.append(f"- 일간: {facts['일간']} — 이 사람 해석의 중심 글자")
+    lines.append(f"- 월령: {facts['월령']}")
 
     lines.append("")
-    lines.append(f"[일간] {saju['일간']['한글']}({saju['일간']['한자']}) · {saju['일간']['오행']}")
     lines.append(
-        f"[월령] {saju['적용 절기']['월지']} "
-        f"({saju['적용 절기']['현재 구간']} 이후)"
+        f"- 오행 개수 (세는 기준: {facts['오행 기준']} · 총 {facts['오행 글자수']}글자)"
+    )
+    for name in OHAENG_ORDER:
+        lines.append(f"    {name}: {facts['오행 개수'][name]}")
+    lines.append(f"    → 요약: {facts['오행 요약']}")
+
+    lines.append("")
+    lines.append("- 위 개수는 이렇게 세었다 (글자 하나씩)")
+    lines.append(
+        "    " + ", ".join(
+            f"{row['글자']}→{row['오행']}" for row in facts["오행 근거"]
+        )
     )
 
-    if not saju["시주 계산 여부"]:
+    if not facts["시주 계산 여부"]:
         lines.append("")
-        lines.append(f"[주의] {saju['시주 제외 사유']}. 시주와 관련된 해석은 하지 말 것.")
+        lines.append(
+            f"- [주의] {facts['시주 제외 사유']}. 시주를 근거로 든 해석은 하지 말 것."
+        )
+
+    lines.append("")
+    lines.append(SAJU_LOCK_RULES)
 
     return "\n".join(lines)
 

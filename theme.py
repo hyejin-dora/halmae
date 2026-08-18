@@ -685,6 +685,38 @@ def _css_cards(t: dict) -> str:
         color: {t['gold_bright']};
     }}
 
+    /* ===== 명식 칸 · 파이썬이 계산한 확정값 =========================
+       할매의 글이 아니라 계산 결과를 그대로 보여주는 자리입니다. */
+    .halmae-myeongsik-row {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin: 0.2rem 0 0.6rem 0;
+    }}
+    .halmae-myeongsik-cell {{
+        flex: 1 1 4.5rem;
+        min-width: 4.5rem;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.15rem;
+        background: {t['bg_deep']};
+        border: 1px solid {t['line_gold']};
+        border-radius: {t['radius_card']};
+        padding: 0.55rem 0.35rem;
+    }}
+    .halmae-myeongsik-cell .halmae-label {{
+        margin: 0;
+    }}
+    .halmae-myeongsik-value {{
+        font-family: {t['font_title']};
+        font-size: 1.05rem;
+        font-weight: 700;
+        color: {t['gold_bright']};
+        line-height: 1.4;
+        white-space: nowrap;
+    }}
+
     /* ===== 대사 상자 · 그대로 읽어도 되는 문장 ===================== */
     .halmae-script {{
         background: {t['bg_deep']};

@@ -125,8 +125,9 @@ SYSTEM_INSTRUCTION = """너는 "할매"다. 만 년 동안 세상사를 지켜�
 
   1) 사주/점성술 근거  →  2) 성향 또는 상황 해석  →  3) 현재 고민과의 연결
 
-예시:
-  "네 일간이 갑목이고 토 기운이 강한 데다 태양궁이 양자리라,
+예시 (아래 대괄호 자리에는 반드시 CALCULATED_SAJU 에 적힌 값을 그대로 넣는다.
+      이 예시에 적힌 글자를 그대로 베껴 쓰지 마라. 자리 모양만 참고하라):
+  "네 일간이 [일간]이고 [오행] 기운이 [개수]개나 되는 데다 태양궁이 [태양궁]이라,
    명리와 점성술 관점 모두에서 목표가 생기면 밀어붙이는 성향이 강하게 나타난단다."
 
 - 어려운 명리 용어(일간, 월령, 식상, 관성 등)는 쓰자마자 바로 쉬운 말로 풀어준다.
@@ -134,9 +135,16 @@ SYSTEM_INSTRUCTION = """너는 "할매"다. 만 년 동안 세상사를 지켜�
   "명리학에서는 ~로 해석한다", "점성술 관점에서는 ~로 본다" 처럼
   해석 체계라는 점이 드러나게 쓴다.
 
-[사실 관계]
+[사실 관계 — 계산과 해석의 분리]
+이 서비스에서 계산은 파이썬이 하고, 너는 해석만 한다. 이 경계를 넘지 마라.
+- 사주 명식은 CALCULATED_SAJU 블록으로 이미 계산되어 주어진다.
+  년주·월주·일주·시주·일간·오행 개수는 전부 확정값이다.
+- 그 값을 다시 계산하거나, 추정하거나, 다른 글자로 바꾸어 말하지 마라.
+  생년월일과 출생시간이 함께 주어지지만, 그것으로 간지를 뽑아내려 하지 마라.
+- 명식 값을 문장에 적을 때는 CALCULATED_SAJU 에 적힌 글자를 그대로 옮겨 적는다.
+  (예: 일주가 갑오라고 적혀 있으면 "갑오"라고만 쓴다. 무인·병자 따위로 바꾸지 않는다)
+- 오행 개수도 적힌 숫자 그대로 쓴다. 직접 세어 고치지 마라.
 - 입력 데이터에 없는 사실을 지어내지 마라.
-- 사주·점성술 값은 이미 파이썬에서 계산되어 주어진다. 다시 계산하지 말고 그대로 쓴다.
 - 주어지지 않은 항목(예: 상승궁 없음, 대운/연운 없음)은 근거로 삼지 마라.
 - 대운·연운·세운 데이터는 제공되지 않는다. 특정 연도나 월을 지어내 예언하지 마라.
 
@@ -174,8 +182,10 @@ class Evidence(BaseModel):
         description="근거의 출처. '사주' 또는 '점성술' 중 하나만 적을 것."
     )
     fact: str = Field(
-        description="근거로 삼은 계산값. 예: '일간 갑목(甲), 토 기운 5개' "
-        "또는 '태양궁 Aries'. 주어진 데이터에 있는 값만 쓸 것."
+        description="근거로 삼은 계산값을 CALCULATED_SAJU / 점성술 데이터에서 "
+        "글자 그대로 옮겨 적을 것. 새로 계산하거나 다른 값으로 바꾸면 안 된다. "
+        "형식 예: '일간 {일간}, {오행} 기운 {개수}개' 또는 '태양궁 {태양궁}'. "
+        "주어진 블록에 없는 값은 절대 쓰지 말 것."
     )
     reading: str = Field(
         description="그 값을 명리학/점성술에서 어떻게 해석하는지, 그래서 이 사람이 "
@@ -494,12 +504,95 @@ def build_prompt(
 ) -> str:
     """단계 번호에 맞는 질문 글을 돌려줍니다.
 
-    1단계에만 사용자 정보 블록을 붙입니다.
-    2·3단계는 앞선 대화가 통째로 함께 전달되므로 다시 붙일 필요가 없습니다.
+    1단계에는 사용자 정보 블록을 통째로 붙입니다.
+    2·3단계는 앞선 대화가 함께 전달되지만, 대화가 길어질수록 모델이 명식을
+    슬금슬금 바꿔 말하는 일이 생깁니다. 그래서 확정 명식(CALCULATED_SAJU)만
+    단계마다 다시 붙여 못을 박습니다. (사용자 정보는 다시 붙이지 않습니다)
     """
     if step == 1:
         return build_profile_block(answers, saju, astro) + "\n\n" + STEP1_TASK
-    return STEP_TASKS[step]
+
+    return _reanchor_block(saju, astro) + STEP_TASKS[step]
+
+
+def _reanchor_block(saju: dict | None, astro: dict | None) -> str:
+    """2·3단계 맨 앞에 다시 붙이는 확정값 블록.
+
+    개인정보(이름·생년월일 등)는 넣지 않습니다. 계산 결과만 다시 못 박습니다.
+    """
+    from astrology import format_astrology_for_prompt
+    from saju import format_saju_for_prompt
+
+    parts = ["[다시 확인 — 아래 값은 1단계와 똑같은 확정값이다. 바뀌지 않았다]"]
+    if saju:
+        parts.append(format_saju_for_prompt(saju))
+    else:
+        parts.append("[사주 명식]\n계산하지 못했다. 사주를 근거로 든 해석은 하지 말 것.")
+    if astro:
+        parts.append(format_astrology_for_prompt(astro))
+
+    return "\n\n".join(parts) + "\n\n"
+
+
+# ===============================================================
+#  4-2. 할매가 계산값을 바꿔 말했는지 확인
+#
+#  화면에 뜨는 명식은 파이썬 계산값이라(app.render_myeongsik) 잘못 보이는 일은
+#  없습니다. 다만 해석 글 안에서 다른 간지를 말하면 앞뒤가 안 맞으므로,
+#  개발 로그에 남겨 프롬프트를 손볼 수 있게 합니다.
+#
+#  로그에는 '어느 칸에서 어긋났는지'와 '맞는 값'만 남깁니다.
+#  생년월일·이름 같은 개인정보는 넣지 않습니다.
+# ===============================================================
+def _text_fields(answer) -> list[tuple[str, str]]:
+    """응답 안의 글자 칸을 (칸 이름, 내용)으로 모두 펼칩니다."""
+    found: list[tuple[str, str]] = []
+
+    def walk(value, path: str) -> None:
+        if isinstance(value, str):
+            found.append((path, value))
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                walk(item, f"{path}.{key}" if path else key)
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                walk(item, f"{path}[{index}]")
+
+    walk(answer.model_dump(), "")
+    return found
+
+
+def find_saju_contradictions(answer, saju: dict | None) -> list[str]:
+    """할매 답변이 확정 명식과 어긋나는 곳을 찾아 문장으로 돌려줍니다."""
+    if not saju:
+        return []
+
+    from saju import CHEONGAN, JIJI, saju_facts
+
+    facts = saju_facts(saju)
+    allowed = {
+        pillar[:2] for pillar in
+        (facts["년주"], facts["월주"], facts["일주"], facts["시주"])
+        if pillar
+    }
+    every_ganji = {stem + branch
+                   for index, stem in enumerate(CHEONGAN)
+                   for offset, branch in enumerate(JIJI)
+                   if (index - offset) % 2 == 0}      # 실제로 존재하는 60갑자만
+
+    warnings: list[str] = []
+    seen: set[str] = set()
+    for field, text in _text_fields(answer):
+        for position in range(len(text) - 1):
+            pair = text[position:position + 2]
+            if pair in every_ganji and pair not in allowed and pair not in seen:
+                seen.add(pair)
+                warnings.append(
+                    f"할매가 명식에 없는 간지 '{pair}' 를 말했습니다 "
+                    f"({field}). 확정 명식은 {' · '.join(sorted(allowed))} 입니다."
+                )
+
+    return warnings
 
 
 # ===============================================================
@@ -670,6 +763,18 @@ def ask_halmae(
         ) from exc
 
     answer = _parse_answer(response, schema)
+
+    # 할매가 명식을 바꿔 말했는지 확인합니다. (화면에 뜨는 명식은 파이썬 값이라
+    # 사용자에게 잘못 보이지는 않지만, 해석 글 안에서 어긋나면 알아야 합니다)
+    contradictions = find_saju_contradictions(answer, saju)
+    if contradictions:
+        # 운영 로그에는 개인정보가 남으면 안 되므로 '몇 군데가 어긋났는지'만
+        # 남깁니다. 실제 값은 개발용 테스트(test_saju_pipeline.py)에서 봅니다.
+        logger.warning(
+            "%d단계 — 할매가 확정 명식에 없는 간지를 %d군데에서 말했습니다. "
+            "화면에 뜨는 명식은 파이썬 계산값이라 영향은 없지만 프롬프트 점검 필요.",
+            step, len(contradictions),
+        )
 
     usage = getattr(response, "usage_metadata", None)
     if usage is not None:
