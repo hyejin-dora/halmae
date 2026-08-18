@@ -48,6 +48,7 @@
 
 import hashlib
 import json
+import re
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -154,6 +155,62 @@ def build_card_key(
     """위 한 줄을 SHA-256 으로 요약한 열쇠. 언제 어디서 돌려도 같은 값입니다."""
     fingerprint = build_card_fingerprint(answers, saju, astro, year, source)
     return hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()
+
+
+# ===============================================================
+#  1-2. 카드에서 이름 지우기 (저장 전 마지막 울타리)
+# ===============================================================
+# 카드 글은 Gemini 가 씁니다. 프롬프트에 "이름을 적지 말 것"이라고 못 박아두었지만,
+# 모델이 그 규칙을 어길 수도 있습니다. card_data 는 Supabase 에 남는 값이라
+# 이름이 한 번 섞여 들어가면 그대로 저장되어 버립니다.
+#
+# 그래서 저장하기 전에 한 번 더 걸러냅니다.
+#   · 성을 포함한 이름 전체("안혜진")   → 언제나 지웁니다
+#   · 이름만("혜진")                    → 부르는 말일 때만 지웁니다 ("혜진아", "혜진이")
+#     ('지원' 처럼 이름이 흔한 낱말과 겹칠 때 멀쩡한 문장까지 망가뜨리지 않으려고
+#      호격 조사가 붙은 경우로 좁혔습니다.)
+#
+# 화면에 보여주는 카드에도 같은 처리를 하므로,
+# "지금 본 카드"와 "저장된 카드"가 늘 같습니다. (다시 열어도 같은 카드)
+NAME_REPLACEMENT = "너"
+
+# 카드에서 글자가 들어 있는 칸. 나머지(year 등)는 손대지 않습니다.
+CARD_TEXT_FIELDS = ("title", "keyword", "message", "basis", "caution")
+CARD_LIST_FIELDS = ("actions",)
+
+
+def _scrub_name_in_text(text: str, name: str) -> str:
+    """글 한 덩이에서 이름을 지웁니다."""
+    if not text or not name:
+        return text
+    cleaned = re.sub(re.escape(name), NAME_REPLACEMENT, text)
+    if len(name) >= 3:                       # 성(1자) + 이름(2자 이상)으로 봅니다
+        given = name[1:]
+        # 부르는 말일 때만 — "혜진아" / "혜진이" / "혜진야"
+        cleaned = re.sub(
+            re.escape(given) + "[아야이](?![가-힣])", NAME_REPLACEMENT, cleaned
+        )
+    return cleaned
+
+
+def scrub_card(card: dict, name: str | None) -> dict:
+    """카드에서 이름을 지운 사본을 돌려줍니다. (원본은 건드리지 않습니다)"""
+    name = " ".join(str(name or "").split())
+    if not name or len(name) < 2 or not isinstance(card, dict):
+        return card
+    cleaned = dict(card)
+    for field in CARD_TEXT_FIELDS:
+        value = cleaned.get(field)
+        if isinstance(value, str):
+            cleaned[field] = _scrub_name_in_text(value, name)
+    for field in CARD_LIST_FIELDS:
+        value = cleaned.get(field)
+        if isinstance(value, list):
+            cleaned[field] = [
+                _scrub_name_in_text(item, name) if isinstance(item, str) else item
+                for item in value
+            ]
+    return cleaned
 
 
 # ===============================================================

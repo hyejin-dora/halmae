@@ -92,7 +92,7 @@ _env_flag = get_flag
 #
 #  내 컴퓨터에서 잠깐만: HALMAE_USE_MOCK_AI=0 streamlit run app.py
 # ===============================================================
-MOCK_AI_DEFAULT = True                 # ★ 여기 (배포 초기에는 True 로 둡니다)
+MOCK_AI_DEFAULT = False                # ★ 여기 (실제 Gemini 응답 품질 테스트 중)
 
 USE_MOCK_AI = get_flag("HALMAE_USE_MOCK_AI", MOCK_AI_DEFAULT)
 
@@ -122,6 +122,32 @@ MODEL_OVERRIDE = get_secret("GEMINI_MODEL", "")
 GEMINI_MODEL = MODEL_OVERRIDE or (DEV_MODEL if DEV_MODE else PROD_MODEL)
 
 
+# ===============================================================
+#  ★ 설정 3 · 개발자용 화면 보이기 ★     ← 배포할 때는 반드시 False
+#
+#      False  →  (기본값 · 배포)
+#                일반 사용자 화면에 아래가 하나도 나오지 않습니다.
+#                  · Gemini 프롬프트 / System prompt
+#                  · Gemini 에 보낸 입력값과 돌려받은 원본 응답
+#                  · 사주·점성술 계산 원본(🧪 테스트 패널), 좌표, 카드 열쇠
+#                  · "개발용 모델 …", "DEV MODE" 같은 개발자용 문구
+#
+#      True   →  위 정보가 다시 보입니다. 내 컴퓨터에서 값을 확인할 때만 켭니다.
+#
+#  [잠깐만 켜보고 싶을 때]
+#    내 컴퓨터    HALMAE_USE_DEV_MODE=1 streamlit run app.py
+#    Cloud       Settings → Secrets 에  HALMAE_USE_DEV_MODE = "true"
+#                (확인이 끝나면 반드시 지우거나 "false" 로 되돌리세요)
+#
+#  ※ 바로 위 DEV_MODE 와 이름이 비슷하지만 하는 일이 다릅니다.
+#       DEV_MODE      어떤 Gemini '모델'을 쓸지
+#       USE_DEV_MODE  개발자용 '화면'을 보여줄지
+# ===============================================================
+USE_DEV_MODE_DEFAULT = False           # ★ 여기 (배포는 반드시 False)
+
+USE_DEV_MODE = get_flag("HALMAE_USE_DEV_MODE", USE_DEV_MODE_DEFAULT)
+
+
 # ---------------------------------------------------------------
 #  배포하기 전 확인표
 #      HALMAE_USE_MOCK_AI = "false"   ← 진짜 할매가 답하도록 (Secrets)
@@ -129,6 +155,7 @@ GEMINI_MODEL = MODEL_OVERRIDE or (DEV_MODEL if DEV_MODE else PROD_MODEL)
 #      GEMINI_API_KEY                 ← Gemini 열쇠 (Secrets)
 #      SUPABASE_URL · SUPABASE_SECRET_KEY  ← 저장소 (Secrets)
 #      HALMAE_DEV_KEY                 ← 개발자 Funnel 화면 잠그기 (Secrets)
+#      HALMAE_USE_DEV_MODE            ← 넣지 마세요. 프롬프트·Debug 화면이 열립니다
 # ---------------------------------------------------------------
 
 
@@ -142,6 +169,8 @@ if __name__ == "__main__":
     print(f"  USE_MOCK_AI    {USE_MOCK_AI}    "
           f"{'(Gemini 호출 안 함)' if USE_MOCK_AI else '(실제 Gemini 호출)'}")
     print(f"  DEV_MODE       {DEV_MODE}")
+    print(f"  USE_DEV_MODE   {USE_DEV_MODE}    "
+          f"{'(개발자용 화면 보임 — 배포 전 끄세요)' if USE_DEV_MODE else '(개발자용 화면 숨김)'}")
     print(f"  GEMINI_MODEL   {GEMINI_MODEL}")
     print()
     print("[열쇠 · 값은 보여주지 않습니다]")

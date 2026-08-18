@@ -23,6 +23,7 @@
     streamlit run app.py
 """
 
+import logging
 from datetime import date, time, timedelta
 
 import streamlit as st
@@ -32,7 +33,7 @@ import card_store
 import db
 import theme
 from astrology import AstrologyError, compute_astrology
-from config import USE_MOCK_AI
+from config import USE_DEV_MODE, USE_MOCK_AI
 from halmae_ai import (
     GEMINI_MODEL,
     IS_DEV_MODEL,
@@ -81,6 +82,34 @@ st.set_page_config(
 #    가독성(명도 대비)은 `python theme.py` 로 검사할 수 있습니다.
 # ---------------------------------------------------------------
 st.markdown(theme.build_css(), unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------
+# 2-2. 개발 로그
+#     사용자에게는 짧고 이해되는 문구만 보여주고,
+#     "왜 그랬는지"는 여기(터미널 · Streamlit Cloud 의 Logs)에만 남깁니다.
+#     개인정보는 남기지 않습니다 — 오류 종류와 위치까지만 적습니다.
+# ---------------------------------------------------------------
+log = logging.getLogger("halmae.app")
+
+
+# ---------------------------------------------------------------
+# 2-3. 개발자용 화면을 언제 보여줄지
+#
+#     [Prompt · Debug 정보]  config.USE_DEV_MODE 하나로만 결정됩니다.
+#         기본값 False — 배포된 앱에서는 주소를 어떻게 치든 열리지 않습니다.
+#         일반 사용자 화면에 아래가 하나도 나오지 않습니다:
+#             Gemini 프롬프트 / System prompt / Gemini 입력값 /
+#             원본 응답 / 계산 원본 / 좌표 / 카드 열쇠 / 개발자용 문구
+#         켜는 법은 config.py 의 ★ 설정 3 을 보세요.
+#
+#     [Funnel 지표 화면]  예전 그대로 주소 뒤 ?dev=<HALMAE_DEV_KEY>.
+#         지표만 보는 화면이라 개인정보도 프롬프트도 나오지 않습니다.
+# ---------------------------------------------------------------
+try:
+    IS_DEV_FUNNEL = analytics.dev_dashboard_allowed(st.query_params.get("dev"))
+except Exception:                      # 주소를 읽지 못해도 앱은 떠야 합니다
+    IS_DEV_FUNNEL = False
 
 
 # ---------------------------------------------------------------
@@ -179,14 +208,12 @@ if "feedback_result" not in st.session_state:
     st.session_state.feedback_result = None
 
 
-def track(event_name: str) -> None:
-    """행동 로그를 한 줄 남깁니다. (개인정보는 넘기지 않습니다.)
+def _write_event(event_name: str) -> None:
+    """이벤트 한 줄을 실제로 남깁니다. (개인정보는 넘기지 않습니다.)
 
-    Streamlit 은 버튼을 누를 때마다 코드를 처음부터 다시 실행하기 때문에,
-    should_log() 로 "이 세션에서 이미 기록한 이벤트인지" 먼저 확인합니다.
+    넘기는 값은 analytics.FIELDNAMES 여섯 칸뿐입니다.
+    이름·생년월일·출생시간·출생지역·좌표·추가 질문은 여기까지 오지도 않습니다.
     """
-    if not analytics.should_log(st.session_state.logged_events, event_name):
-        return
     analytics.log_event(
         session_id=st.session_state.session_id,
         event_name=event_name,
@@ -196,6 +223,43 @@ def track(event_name: str) -> None:
         model=MODEL_LOG_NAME,
         step=st.session_state.step,
     )
+
+
+def track(event_name: str) -> None:
+    """[화면 노출] 이벤트 — 한 세션에 딱 한 번만 남깁니다.
+
+    Streamlit 은 버튼 하나만 눌러도 스크립트를 처음부터 다시 실행합니다.
+    그래서 render_*() 안에서 그냥 기록하면, 사용자는 가만히 있는데도
+    step1_view · premium_view 같은 줄이 rerun 횟수만큼 쌓입니다.
+
+    여기서는 st.session_state.logged_events(세션이 살아 있는 동안 유지되는 집합)에
+    이미 있는 이름이면 아무것도 하지 않습니다.
+        · 의도치 않은 rerun  → 두 번째부터는 기록되지 않습니다
+        · 사용자가 정말로 한 행동 → track_action() 으로 따로 기록합니다
+
+    view 계열(landing_view · step1~3_view · card_view · feedback_view ·
+    premium_view)에만 씁니다.
+    """
+    if not analytics.should_log(st.session_state.logged_events, event_name):
+        return
+    _write_event(event_name)
+
+
+def track_action(event_name: str) -> None:
+    """[사용자 행동] 이벤트 — 실제로 누를 때마다 남깁니다.
+
+    이 함수는 st.button(...) 이 True 를 돌려준 자리, 즉 사용자가 손으로
+    누른 순간에만 불립니다. rerun 만으로는 절대 여기까지 오지 않습니다.
+    그래서 "마음을 바꿔 👍 → 👎 → 👍" 처럼 같은 행동을 다시 한 경우를
+    그대로 기록할 수 있습니다.
+
+    Funnel 지표는 모두 '세션 수'로 세기 때문에(analytics.funnel_summary 등),
+    같은 세션이 같은 행동을 두 번 남겨도 전환율이 부풀지 않습니다.
+    """
+    # logged_events 에도 표시해 둡니다. 나중에 이 이름이 track() 으로도
+    # 불릴 일이 생기면 그쪽에서 중복으로 한 줄 더 쌓지 않도록.
+    st.session_state.logged_events.add(event_name)
+    _write_event(event_name)
 
 
 def reset_conversation() -> None:
@@ -213,8 +277,9 @@ def reset_conversation() -> None:
     st.session_state.year_card_cached = False
     st.session_state.year_card_key = None
     # 새 답변에 대해 다시 평가할 수 있도록 피드백 버튼도 비워둡니다.
+    # 피드백 버튼도 '아직 안 고른' 상태로 되돌립니다.
+    # (버튼은 st.feedback 과 달리 남는 위젯 상태가 없어 이 한 줄이면 됩니다.)
     st.session_state.feedback_result = None
-    st.session_state.pop("halmae_feedback", None)
 
 
 def compute_calendar(answers: dict) -> None:
@@ -232,8 +297,11 @@ def compute_calendar(answers: dict) -> None:
             answers.get("평달/윤달"),
         )
     except CalendarError as exc:
+        # 사용자에게는 이 문구만 보여주고, 원인은 개발 로그에 남깁니다.
+        log.warning("달력 계산 실패 (안내함) — %s", exc)
         st.session_state.calendar_error = str(exc)
     except Exception:
+        log.exception("달력 계산 중 예상 못 한 오류")
         st.session_state.calendar_error = (
             "날짜를 계산하는 중 알 수 없는 문제가 생겼어요."
         )
@@ -260,8 +328,10 @@ def compute_saju_info(answers: dict) -> None:
             birth_place=answers.get("출생지역"),
         )
     except CalendarError as exc:
+        log.warning("사주 계산 실패 (안내함) — %s", exc)
         st.session_state.saju_error = str(exc)
     except Exception:
+        log.exception("사주 계산 중 예상 못 한 오류")
         st.session_state.saju_error = (
             "사주를 계산하는 중 알 수 없는 문제가 생겼어요."
         )
@@ -289,8 +359,12 @@ def compute_astro_info(answers: dict) -> None:
                 leap_month=answers.get("평달/윤달"),
             )
     except (AstrologyError, CalendarError) as exc:
+        # 출생지역을 못 찾은 경우가 여기로 옵니다.
+        # 검색어(출생지역 원문)는 개인정보라 로그에 적지 않습니다.
+        log.warning("점성술 계산 실패 (안내함) — %s: %s", type(exc).__name__, exc)
         st.session_state.astro_error = str(exc)
     except Exception:
+        log.exception("점성술 계산 중 예상 못 한 오류")
         st.session_state.astro_error = (
             "별자리를 계산하는 중 알 수 없는 문제가 생겼어요."
         )
@@ -312,7 +386,13 @@ def render_model_badge() -> None:
     개발 중에 가짜 응답이나 가벼운 모델을 쓰고 있다는 걸 잊고
     "품질이 왜 이러지?" 하는 일이 없도록 눈에 보이게 둡니다.
     바꾸는 곳은 config.py 의 USE_MOCK_AI / DEV_MODE 두 줄입니다.
+
+    "DEV MODE", "개발용 모델 gemini-…" 같은 개발자용 문구라서
+    일반 사용자에게는 보여주지 않습니다. (config.USE_DEV_MODE)
     """
+    if not USE_DEV_MODE:
+        return
+
     if USE_MOCK_AI:
         st.markdown(
             '<div class="halmae-modelbadge halmae-mockbadge">'
@@ -333,9 +413,10 @@ def render_model_badge() -> None:
 def render_mock_footer() -> None:
     """화면 맨 아래 구석에 작게 붙는 Mock 표시.
 
-    USE_MOCK_AI = False 로 바꾸면 이 문구는 아예 나오지 않습니다.
+    개발자용 문구라서 config.USE_DEV_MODE 가 켜져 있을 때만 나옵니다.
+    USE_MOCK_AI = False 로 바꾸면 그때도 나오지 않습니다.
     """
-    if not USE_MOCK_AI:
+    if not (USE_DEV_MODE and USE_MOCK_AI):
         return
     st.markdown(
         '<div class="halmae-mockfooter">DEV MODE · Mock AI</div>',
@@ -374,7 +455,7 @@ def render_intro() -> None:
     )
 
     if st.button("할매 만나러 가기", type="primary", width="stretch"):
-        track("start_click")         # 시작 버튼을 누른 순간
+        track_action("start_click")  # 시작 버튼을 누른 순간 (누를 때마다)
         go_to("input")
 
     st.markdown(
@@ -554,7 +635,7 @@ def render_input() -> None:
             }
             # 입력을 마치고 제출한 순간
             # (answers 를 채운 뒤에 불러야 '고민 분야'가 함께 기록됩니다)
-            track("input_submit")
+            track_action("input_submit")
 
             # 생년월일 → 양력·음력 변환, 사주 네 기둥 계산
             # (아직 Gemini에는 보내지 않습니다)
@@ -614,7 +695,8 @@ def render_calendar_check() -> None:
         )
 
         # 원본 dict 확인 (expander 안에는 expander를 넣을 수 없어 체크박스로)
-        if st.checkbox("원본 값 보기 (개발자용)", key="show_raw_calendar"):
+        # 원본에는 생년월일이 그대로 들어 있어서 USE_DEV_MODE 일 때만 보여줍니다.
+        if USE_DEV_MODE and st.checkbox("원본 값 보기 (개발자용)", key="show_raw_calendar"):
             st.write(info)
 
 
@@ -677,10 +759,12 @@ def render_saju_check() -> None:
             st.info(note, icon="⚠️")
 
         # 원본 dict / 프롬프트용 글 확인 (expander 안에는 expander를 못 넣습니다)
-        if st.checkbox("Gemini에 보낼 형태 보기 (개발자용)", key="show_saju_prompt"):
-            st.code(format_saju_for_prompt(saju), language="text")
-        if st.checkbox("원본 값 보기 (개발자용)", key="show_raw_saju"):
-            st.write(saju)
+        # 둘 다 생년월일·출생시간이 그대로 들어 있어 USE_DEV_MODE 일 때만 보여줍니다.
+        if USE_DEV_MODE:
+            if st.checkbox("Gemini에 보낼 형태 보기 (개발자용)", key="show_saju_prompt"):
+                st.code(format_saju_for_prompt(saju), language="text")
+            if st.checkbox("원본 값 보기 (개발자용)", key="show_raw_saju"):
+                st.write(saju)
 
 
 def render_astrology_check() -> None:
@@ -702,8 +786,14 @@ def render_astrology_check() -> None:
 
         rows = [
             ("출생지역", f"{astro['출생지역 입력']}  ({astro['찾은 지역']})"),
-            ("위도", f"{astro['latitude']}"),
-            ("경도", f"{astro['longitude']}"),
+        ]
+        # 좌표는 개인정보라 화면에 띄우지 않습니다. (USE_DEV_MODE 일 때만)
+        if USE_DEV_MODE:
+            rows += [
+                ("위도", f"{astro['latitude']}"),
+                ("경도", f"{astro['longitude']}"),
+            ]
+        rows += [
             ("시간대", f"{astro['timezone']}  ({astro['UTC 차이']})"),
             ("Sun Sign", f"{astro['sun_sign']} · {astro['태양']['이름']}"),
             ("Moon Sign", f"{astro['moon_sign']} · {astro['달']['이름']}"),
@@ -725,8 +815,29 @@ def render_astrology_check() -> None:
         for note in astro["주의사항"]:
             st.info(note, icon="⚠️")
 
-        if st.checkbox("원본 값 보기 (개발자용)", key="show_raw_astro"):
+        # 원본에는 좌표가 들어 있어 USE_DEV_MODE 일 때만 보여줍니다.
+        if USE_DEV_MODE and st.checkbox("원본 값 보기 (개발자용)", key="show_raw_astro"):
             st.write(astro)
+
+
+def render_calculation_notice() -> None:
+    """계산이 실패했을 때 사용자에게 보여줄 짧은 안내.
+
+    사주·별자리 계산 결과를 자세히 보여주던 🧪 패널은 개발자용이라
+    일반 사용자에게는 열리지 않습니다(config.USE_DEV_MODE).
+    다만 "왜 별자리 이야기가 없는지"는 알 수 있어야 하므로,
+    실패했을 때의 짧은 안내 문구만 여기서 대신 보여줍니다.
+    (자세한 원인은 화면이 아니라 개발 로그에 남습니다.)
+    """
+    seen = []
+    for message in (
+        st.session_state.saju_error,
+        st.session_state.astro_error,
+        st.session_state.calendar_error,
+    ):
+        if message and message not in seen:
+            seen.append(message)
+            st.warning(message)
 
 
 def ensure_reply(step: int, answers: dict) -> None:
@@ -748,8 +859,11 @@ def ensure_reply(step: int, answers: dict) -> None:
                 astro=st.session_state.astro_info,
             )
         except HalmaeError as exc:
+            log.warning("%d단계 답변 실패 (안내함) — %s", step, exc)
             st.session_state.errors[step] = str(exc)
-        except Exception:                 # 예상 못 한 문제로도 앱이 멈추지 않게
+        except Exception as exc:          # 예상 못 한 문제로도 앱이 멈추지 않게
+            log.exception("%d단계 답변 중 예상 못 한 오류", step)
+            db.record_failure(f"step{step}", exc)
             st.session_state.errors[step] = (
                 "알 수 없는 문제가 생겼어요. 잠시 뒤에 다시 시도해주세요."
             )
@@ -911,23 +1025,37 @@ def ensure_year_card() -> None:
         )
         return
 
-    # 올해 간지는 파이썬이 계산합니다. (Gemini가 연도를 지어내지 못하게)
-    year_ganji = compute_year_ganji()
-    st.session_state.year_ganji = year_ganji
-    year = year_ganji["연도"]
-
     # --- 1. 이 사람 · 이 해의 열쇠를 만듭니다 --------------------
-    # Mock 카드와 진짜 카드가 섞이지 않도록 출처도 열쇠에 넣습니다.
-    source = "mock" if USE_MOCK_AI else "gemini"
-    key = card_store.build_card_key(
-        st.session_state.answers, saju, st.session_state.astro_info, year, source
-    )
-    st.session_state.year_card_key = key
-    st.session_state.year_card_fingerprint = card_store.build_card_fingerprint(
-        st.session_state.answers, saju, st.session_state.astro_info, year, source
-    )
+    #     올해 간지는 파이썬이 계산합니다. (Gemini가 연도를 지어내지 못하게)
+    #     이 계산이나 열쇠 만들기가 실패해도 빨간 오류 화면이 뜨지 않도록
+    #     통째로 감싸둡니다. 원인은 개발 로그에만 남깁니다.
+    try:
+        year_ganji = compute_year_ganji()
+        st.session_state.year_ganji = year_ganji
+        year = year_ganji["연도"]
+
+        # Mock 카드와 진짜 카드가 섞이지 않도록 출처도 열쇠에 넣습니다.
+        source = "mock" if USE_MOCK_AI else "gemini"
+        key = card_store.build_card_key(
+            st.session_state.answers, saju, st.session_state.astro_info,
+            year, source,
+        )
+        st.session_state.year_card_key = key
+        st.session_state.year_card_fingerprint = card_store.build_card_fingerprint(
+            st.session_state.answers, saju, st.session_state.astro_info,
+            year, source,
+        )
+    except Exception as exc:
+        log.exception("올해의 카드 열쇠를 만들지 못했습니다")
+        db.record_failure("year_card key", exc)
+        st.session_state.year_card_error = (
+            "올해의 카드를 준비하는 중 문제가 생겼어요. 잠시 뒤에 다시 눌러주세요."
+        )
+        return
 
     # --- 2. 이미 만들어둔 카드가 있으면 그대로 씁니다 -------------
+    #     load_card() 는 저장소가 말썽이어도 예외를 내지 않고 None 을 돌려줍니다.
+    #     (Supabase 조회 실패 → 개발 로그에만 남고, 아래에서 새로 뽑습니다)
     saved = card_store.load_card(key)
     if saved:
         try:
@@ -936,7 +1064,7 @@ def ensure_year_card() -> None:
             return                      # Gemini를 부르지 않습니다
         except Exception:
             # 저장된 모양이 옛날 것이라 안 맞으면 새로 뽑습니다.
-            pass
+            log.warning("저장된 카드 모양이 맞지 않아 새로 뽑습니다 · key=%s", key[:16])
 
     # --- 3. 없을 때만 Gemini를 부르고, 받은 카드를 저장합니다 -----
     with st.spinner(YEAR_CARD_LOADING):
@@ -946,12 +1074,23 @@ def ensure_year_card() -> None:
                 year_ganji,
                 year_luck_notes(saju, year_ganji),
             )
+            # 카드 글에 이름이 섞여 들어갔으면 여기서 지웁니다.
+            # 화면에 보여줄 카드와 저장할 카드에 똑같이 적용해야
+            # 나중에 다시 열었을 때 같은 카드가 나옵니다.
+            card = YearCard.model_validate(
+                card_store.scrub_card(
+                    card.model_dump(), st.session_state.answers.get("이름")
+                )
+            )
             st.session_state.year_card = card
             st.session_state.year_card_cached = False
             card_store.save_card(key, card.model_dump(), year, MODEL_LOG_NAME)
         except HalmaeError as exc:
+            log.warning("올해의 카드 실패 (사용자 안내) — %s", exc)
             st.session_state.year_card_error = str(exc)
-        except Exception:
+        except Exception as exc:
+            log.exception("올해의 카드를 만들지 못했습니다")
+            db.record_failure("year_card", exc)
             st.session_state.year_card_error = (
                 "카드를 뽑는 중 알 수 없는 문제가 생겼어요."
             )
@@ -968,7 +1107,7 @@ def render_year_card() -> None:
             unsafe_allow_html=True,
         )
         if st.button("올해의 카드 받기", type="primary", key="year_card_cta", width="stretch"):
-            track("card_click")
+            track_action("card_click")
             ensure_year_card()
             st.rerun()
         return
@@ -1023,7 +1162,8 @@ def render_year_card() -> None:
     st.code(format_year_card_text(card, ganji), language="text")
 
     # 개발자 확인용 — 열쇠가 어떻게 만들어졌고, 저장된 걸 꺼내 썼는지
-    if st.checkbox("카드 열쇠 보기 (개발자용)", key="show_card_key"):
+    # 지문(fingerprint)에는 생년월일·좌표가 들어 있어 USE_DEV_MODE 일 때만.
+    if USE_DEV_MODE and st.checkbox("카드 열쇠 보기 (개발자용)", key="show_card_key"):
         st.caption(
             ("저장된 카드를 그대로 꺼내 썼어요 (Gemini 호출 없음)"
              if st.session_state.year_card_cached
@@ -1047,42 +1187,83 @@ FEEDBACK_MESSAGES = {
     "negative": "어허, 다음엔 더 제대로 들여다보마.",
 }
 
+# 지금 무엇을 골랐는지 글로 보여줄 때 쓰는 이름표
+FEEDBACK_LABELS = {"positive": "👍 맞아요", "negative": "👎 아니에요"}
+
 
 def render_feedback() -> None:
-    """Step 3 · 올해의 카드를 본 뒤, Premium 바로 위에 붙는 피드백 영역."""
+    """Step 3 · 올해의 카드를 본 뒤, Premium 바로 위에 붙는 피드백 영역.
+
+    화면에 보이는 것은 제목 한 줄과 버튼 두 개가 전부입니다.
+
+        할매 말, 잘 맞았나요?
+        [ 👍 맞아요 ]   [ 👎 아니에요 ]
+
+    지금 고른 쪽은 primary(금색 채움), 고르지 않은 쪽은 secondary(테두리만)로
+    그려서 무엇을 골랐는지 버튼 자체로 알 수 있게 했습니다.
+    이모지만 따로 뜨는 위젯과 안내 문구를 함께 두면 같은 말이 두 번 보여서,
+    버튼 하나로 합치고 나머지는 없앴습니다.
+
+    저장 방식은 그대로입니다 — analytics.save_feedback() 이 session_id 당
+    한 줄만 두고, 마음이 바뀌면 새 줄을 쌓지 않고 그 줄을 고쳐 씁니다.
+    """
     track("feedback_view")           # 피드백 영역이 눈에 보인 순간
 
     st.markdown(
-        '<p class="halmae-feedback-title">할매 말, 잘 맞았나요?</p>'
-        '<p class="halmae-feedback-hint">👍 맞아요 &nbsp;·&nbsp; 👎 아니에요</p>',
+        '<p class="halmae-feedback-title">할매 말, 잘 맞았나요?</p>',
         unsafe_allow_html=True,
     )
 
-    # st.feedback 은 👎 를 0, 👍 를 1 로 돌려줍니다. 안 눌렀으면 None.
-    choice = st.feedback("thumbs", key="halmae_feedback")
+    current = st.session_state.feedback_result      # None / positive / negative
 
-    if choice is None:
-        return
+    # 지금 고른 쪽만 primary 로 그려서 선택 상태를 눈에 보이게 합니다.
+    def _button_type(name: str) -> str:
+        return "primary" if current == name else "secondary"
 
-    result = "positive" if choice == 1 else "negative"
+    good_col, bad_col = st.columns(2)
+    chosen = None
+    if good_col.button(
+        FEEDBACK_LABELS["positive"],
+        key="feedback_yes",
+        type=_button_type("positive"),
+        width="stretch",
+    ):
+        chosen = "positive"
+    if bad_col.button(
+        FEEDBACK_LABELS["negative"],
+        key="feedback_no",
+        type=_button_type("negative"),
+        width="stretch",
+    ):
+        chosen = "negative"
 
-    # 화면이 다시 그려질 때마다 저장하지 않도록, 답이 '바뀌었을 때만' 기록합니다.
-    if result != st.session_state.feedback_result:
-        st.session_state.feedback_result = result
+    # 답이 '바뀌었을 때만' 저장합니다.
+    # (버튼은 누른 순간에만 True 라서 rerun 으로는 여기까지 오지 않습니다.
+    #  같은 쪽을 또 눌러도 값이 그대로면 아무것도 하지 않습니다.)
+    if chosen and chosen != current:
+        st.session_state.feedback_result = chosen
         # 최종 답 저장 (같은 세션이면 새 줄을 쌓지 않고 덮어씁니다)
         analytics.save_feedback(
             session_id=st.session_state.session_id,
-            feedback_result=result,
+            feedback_result=chosen,
             concern=st.session_state.answers.get("고민 분야"),
             model=MODEL_LOG_NAME,
         )
-        # 행동 로그 (track 이 세션당 한 번만 남기도록 걸러줍니다)
-        track(f"feedback_{result}")
+        # 행동 로그 — 👍 → 👎 로 바꾼 것은 사용자가 실제로 한 행동이라
+        # 그때마다 한 줄 남깁니다.
+        track_action(f"feedback_{chosen}")
+        # 버튼 모양(primary/secondary)은 위에서 이미 그려졌으므로,
+        # 방금 누른 쪽이 곧바로 강조되도록 화면을 다시 그립니다.
+        st.rerun()
+
+    if current is None:
+        return
 
     st.markdown(
-        f'<div class="halmae-quote">{_escape(FEEDBACK_MESSAGES[result])}</div>',
+        f'<div class="halmae-quote">{_escape(FEEDBACK_MESSAGES[current])}</div>',
         unsafe_allow_html=True,
     )
+    st.caption("마음이 바뀌면 다른 쪽을 눌러 바꿀 수 있어요. (마지막 답 하나만 남습니다)")
 
 
 # ---------------------------------------------------------------
@@ -1111,10 +1292,17 @@ def render_premium() -> None:
         unsafe_allow_html=True,
     )
 
+    # 누르기 '전'에도 결제가 없다는 걸 분명히 알려줍니다.
+    # (Fake-door 테스트라도 사용자가 결제되는 줄 알고 누르게 두면 안 됩니다.)
+    st.caption(
+        "※ 베타 테스트로 실제 결제는 진행되지 않습니다. "
+        "카드 정보·회원가입·이메일을 받지 않고, 눌러도 돈이 빠져나가지 않아요."
+    )
+
     # --- 아직 CTA를 누르지 않은 상태 ---------------------------
     if not st.session_state.premium_open:
         if st.button("더 깊은 처방 받아보기", type="primary", key="premium_cta", width="stretch"):
-            track("premium_click")   # CTA를 누른 순간
+            track_action("premium_click")   # CTA를 누른 순간
             st.session_state.premium_open = True
             st.rerun()
         return
@@ -1135,11 +1323,11 @@ def render_premium() -> None:
     if st.session_state.purchase_intent is None:
         yes_col, no_col = st.columns(2)
         if yes_col.button("네, 이용해보고 싶어요", type="primary", key="intent_yes", width="stretch"):
-            track("purchase_intent_yes")
+            track_action("purchase_intent_yes")
             st.session_state.purchase_intent = "yes"
             st.rerun()
         if no_col.button("조금 더 고민해볼게요", type="secondary", key="intent_no", width="stretch"):
-            track("purchase_intent_no")
+            track_action("purchase_intent_no")
             st.session_state.purchase_intent = "no"
             st.rerun()
         return
@@ -1171,10 +1359,16 @@ def render_result() -> None:
     st.markdown(theme.rule(), unsafe_allow_html=True)
     render_model_badge()
 
-    # --- 0. 계산 결과 확인 (이번 단계용 테스트 화면) ----------------
-    render_saju_check()
-    render_astrology_check()
-    render_calendar_check()
+    # --- 0. 계산 결과 확인 ------------------------------------------
+    #     🧪 패널 세 개는 사주·별자리 계산이 맞는지 눈으로 확인하려고 만든
+    #     개발자용 화면입니다. (원본 값 · 절기 계산 근거 · 좌표 · 프롬프트 형태)
+    #     일반 사용자에게는 열지 않고, 계산이 실패했을 때의 안내만 보여줍니다.
+    if USE_DEV_MODE:
+        render_saju_check()
+        render_astrology_check()
+        render_calendar_check()
+    else:
+        render_calculation_notice()
 
     # --- 1. 열려 있는 단계를 위에서부터 차례로 보여줍니다 -----------
     #     이미 받아둔 답변은 st.session_state.replies에 남아 있어서,
@@ -1214,7 +1408,7 @@ def render_result() -> None:
                 width="stretch",
             ):
                 # 2단계로 갈 때는 more_click, 3단계로 갈 때는 action_click
-                track("more_click" if step == 1 else "action_click")
+                track_action("more_click" if step == 1 else "action_click")
                 st.session_state.step = step + 1
                 st.rerun()
 
@@ -1228,37 +1422,42 @@ def render_result() -> None:
             render_premium()
 
     # --- 2. 개발자용: 보낸 값과 프롬프트 확인 -----------------------
-    with st.expander("개발자용 · 입력값과 프롬프트 보기"):
-        st.caption(
-            f"{MODEL_LABEL} · 대화 기록 {len(st.session_state.history)}개"
-        )
-        if IS_DEV_MODEL:
+    #     여기에는 이름·생년월일·출생시간·출생지역·추가 질문 원문과
+    #     Gemini 프롬프트·응답 전문이 그대로 나옵니다.
+    #     일반 사용자에게는 절대 보이면 안 되므로 USE_DEV_MODE 일 때만 엽니다.
+    #     (저장은 원래부터 하지 않습니다 — 화면 노출만 막는 것입니다.)
+    if USE_DEV_MODE:
+        with st.expander("개발자용 · 입력값과 프롬프트 보기"):
             st.caption(
-                "지금은 무료 quota 를 아끼려고 가벼운 개발용 모델을 쓰고 있어요. "
-                "최종 답변 품질 테스트는 halmae_ai.py 의 DEV_MODE 를 False 로 "
-                f"바꾼 뒤에 하세요. ({PROD_MODEL} 로 전환됩니다)"
+                f"{MODEL_LABEL} · 대화 기록 {len(st.session_state.history)}개"
             )
-        st.write(answers)
+            if IS_DEV_MODEL:
+                st.caption(
+                    "지금은 무료 quota 를 아끼려고 가벼운 개발용 모델을 쓰고 있어요. "
+                    "최종 답변 품질 테스트는 halmae_ai.py 의 DEV_MODE 를 False 로 "
+                    f"바꾼 뒤에 하세요. ({PROD_MODEL} 로 전환됩니다)"
+                )
+            st.write(answers)
 
-        st.caption("Gemini에 실제로 보낸 질문 (사주·점성술 값이 함께 들어갑니다)")
-        for step in range(1, st.session_state.step + 1):
-            st.code(
-                build_prompt(
-                    step,
-                    answers,
-                    st.session_state.saju_info,
-                    st.session_state.astro_info,
-                ),
-                language="text",
-            )
+            st.caption("Gemini에 실제로 보낸 질문 (사주·점성술 값이 함께 들어갑니다)")
+            for step in range(1, st.session_state.step + 1):
+                st.code(
+                    build_prompt(
+                        step,
+                        answers,
+                        st.session_state.saju_info,
+                        st.session_state.astro_info,
+                    ),
+                    language="text",
+                )
 
-        st.caption("Gemini가 돌려준 구조화 데이터")
-        for step in range(1, st.session_state.step + 1):
-            reply = st.session_state.replies.get(step)
-            if reply is None:
-                continue
-            st.caption(f"{step}단계 · {answer_length(reply)}자")
-            st.json(reply.model_dump())
+            st.caption("Gemini가 돌려준 구조화 데이터")
+            for step in range(1, st.session_state.step + 1):
+                reply = st.session_state.replies.get(step)
+                if reply is None:
+                    continue
+                st.caption(f"{step}단계 · {answer_length(reply)}자")
+                st.json(reply.model_dump())
 
     st.markdown("<div style='height: 1rem;'></div>", unsafe_allow_html=True)
 
@@ -1515,15 +1714,66 @@ def render_dev_funnel() -> None:
 
 # ===============================================================
 #  현재 단계에 맞는 화면을 그립니다.
+#
+#  [마지막 안전망]
+#  화면을 그리다 예상 못 한 오류가 나면 Streamlit 은 빨간 traceback 을
+#  통째로 띄웁니다. 실사용자 테스트에서는 그 화면 자체가 사고입니다.
+#  (코드 경로 · 변수 이름이 그대로 노출되고, 사용자는 무엇을 해야 할지 모릅니다.)
+#
+#  그래서 여기서 한 번 더 받아냅니다.
+#      사용자에게  → 짧고 이해되는 문구 + 처음으로 돌아가는 버튼
+#      개발 로그에  → traceback 전문 (터미널 · Streamlit Cloud 의 Logs)
+#
+#  st.rerun() · st.stop() 도 '예외'로 흐름을 바꾸기 때문에,
+#  그 둘은 붙잡지 않고 그대로 통과시켜야 화면 전환이 정상 동작합니다.
 # ===============================================================
-if analytics.dev_dashboard_allowed(st.query_params.get("dev")):
-    render_dev_funnel()
-elif st.session_state.page == "intro":
-    render_intro()
-elif st.session_state.page == "input":
-    render_input()
-else:
-    render_result()
+try:
+    from streamlit.runtime.scriptrunner_utils.exceptions import (
+        ScriptControlException,
+    )
+    CONTROL_FLOW_EXCEPTIONS: tuple = (ScriptControlException,)
+except Exception:                      # Streamlit 버전이 달라 경로가 바뀐 경우
+    CONTROL_FLOW_EXCEPTIONS = ()
+
+
+def render_current_page() -> None:
+    if IS_DEV_FUNNEL:
+        render_dev_funnel()
+    elif st.session_state.page == "intro":
+        render_intro()
+    elif st.session_state.page == "input":
+        render_input()
+    else:
+        render_result()
+
+
+try:
+    render_current_page()
+except CONTROL_FLOW_EXCEPTIONS:
+    # st.rerun() / st.stop() — 오류가 아니라 화면 전환 신호입니다. 그대로 넘깁니다.
+    raise
+except Exception as unexpected:
+    # Streamlit 버전이 올라가 위 import 경로가 바뀌었더라도
+    # 화면 전환 신호(rerun/stop)를 오류로 삼키지 않도록 이름으로 한 번 더 확인합니다.
+    if type(unexpected).__name__ in (
+        "RerunException", "StopException", "ScriptControlException",
+    ):
+        raise
+
+    # 원인은 개발 로그에만 (개인정보는 애초에 담기지 않는 값들입니다)
+    log.exception("화면을 그리는 중 예상 못 한 오류 · page=%s",
+                  st.session_state.get("page"))
+    db.record_failure("render", unexpected, str(st.session_state.get("page")))
+
+    st.error(
+        "화면을 그리는 중 문제가 생겼어요.  \n"
+        "잠시 뒤에 다시 시도해주시고, 계속 그러면 처음부터 다시 시작해주세요.",
+        icon="🕯️",
+    )
+    if st.button("처음부터 다시 시작하기", type="primary", key="fatal_restart"):
+        reset_conversation()
+        st.session_state.page = "intro"
+        st.rerun()
 
 # 어느 화면이든 맨 아래 구석에 Mock 표시를 붙입니다. (실제 모드에서는 안 나옵니다)
 render_mock_footer()

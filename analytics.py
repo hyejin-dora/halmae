@@ -353,6 +353,19 @@ def should_log(logged_events: set, event_name: str) -> bool:
     Funnel 은 "몇 명이 여기까지 왔는가"를 보는 것이라 한 번이면 충분합니다.
 
     기록해야 하면 True 를 돌려주면서 logged_events 에 표시까지 해둡니다.
+
+    [화면에 보인 것 vs 사용자가 한 것]
+        app.py 는 이 함수를 view 계열에만 씁니다 (app.track).
+            landing_view · step1~3_view · card_view · feedback_view · premium_view
+        사용자가 손으로 누른 행동은 app.track_action 이 매번 남깁니다.
+            start_click · input_submit · more_click · action_click · card_click ·
+            premium_click · purchase_intent_* · feedback_*
+        버튼을 누른 자리에서만 불리므로 rerun 으로는 쌓이지 않고,
+        마음을 바꿔 다시 누른 '진짜 행동'은 그대로 남습니다.
+
+    아래 요약 함수들(funnel_summary · premium_summary · card_summary ·
+    feedback_summary)은 모두 '세션 수'로 세기 때문에, 같은 세션이 같은 행동을
+    두 번 남겨도 전환율이 부풀지 않습니다.
     """
     if event_name in logged_events:
         return False
