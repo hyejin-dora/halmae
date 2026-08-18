@@ -644,6 +644,18 @@ def get_client(api_key: str | None = None) -> genai.Client:
     config.get_secret() 이 환경변수(내 컴퓨터·Codespaces)를 먼저 보고,
     없으면 st.secrets(Streamlit Community Cloud)를 봅니다.
     """
+    # api_key 는 문자열이어야 합니다. 문자열이 아닌 값이 들어오면
+    # .strip() 에서 엉뚱한 AttributeError 가 나서 원인을 찾기 어려워집니다.
+    # (예전 사고: 호출부의 year_notes(list) 가 이 자리로 밀려들어왔습니다)
+    # 그래서 조용히 str() 로 바꾸지 않고, 무엇이 잘못 왔는지 밝히고 멈춥니다.
+    if api_key is not None and not isinstance(api_key, str):
+        raise TypeError(
+            "get_client(api_key=...) 는 문자열만 받습니다. "
+            f"받은 값의 타입: {type(api_key).__name__}. "
+            "카드 인자(year_notes 등)가 api_key 자리로 밀려 들어왔는지 "
+            "호출부의 인자 순서를 확인하세요."
+        )
+
     key = (api_key or get_secret("GEMINI_API_KEY")).strip()
     if not key:
         raise HalmaeError(
@@ -988,6 +1000,7 @@ def ask_year_card(
     astro: dict | None,
     year_ganji: dict,
     year_notes: list[str],
+    *,
     api_key: str | None = None,
 ) -> YearCard:
     """올해의 카드 한 장을 받아옵니다.

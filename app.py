@@ -1132,11 +1132,15 @@ def ensure_year_card() -> None:
             # 그 안에는 고민 분야·추가 질문·Step1~3 응답이 들어 있어서,
             # 넘기면 카드에 "이력서를 고쳐 써라" 같은 고민 전용 행동이 박힙니다.
             # 카드는 계산이 끝난 값(사주·점성술·올해 간지)만으로 만듭니다.
+            # 인자는 반드시 이름을 붙여 넘깁니다 (keyword argument).
+            # 예전에 순서만 맞춰 넘겼다가, halmae_ai 쪽 인자가 하나 바뀐 뒤
+            # year_notes(list) 가 api_key 자리로 밀려들어가
+            # get_client() 에서 'list' object has no attribute 'strip' 이 났습니다.
             card = ask_year_card(
-                saju,
-                st.session_state.astro_info,
-                year_ganji,
-                year_luck_notes(saju, year_ganji),
+                saju=saju,
+                astro=st.session_state.astro_info,
+                year_ganji=year_ganji,
+                year_notes=year_luck_notes(saju, year_ganji),
             )
             # 카드 글에 이름이 섞여 들어갔으면 여기서 지웁니다.
             # 화면에 보여줄 카드와 저장할 카드에 똑같이 적용해야

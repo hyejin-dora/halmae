@@ -12,6 +12,8 @@
     4. 카드 프롬프트에 계산 완료된 값(사주·점성술·올해 간지)이 실제로 들어 있는지
     5. ask_year_card() 가 대화 이력(history)을 받지 않는지 (회귀 방지)
     6. stable_key 지문에 고민 정보가 섞이지 않는지
+    7. app.py 가 인자를 이름으로 넘기는지 · 각 인자의 타입이 맞는지
+       (그리고 Gemini 호출 직전까지 타입 오류 없이 가는지)
 
 절대 하지 않는 일
     - Gemini API 호출 (프롬프트 조립 함수만 부릅니다)
@@ -313,8 +315,126 @@ def verify_app_call_site() -> None:
     check("ensure_year_card() 코드가 고민 분야·추가 질문을 읽지 않는다",
           "고민 분야" not in code and "추가 질문" not in code)
     check("ask_year_card 에 saju 와 astro 를 넘긴다",
-          "ask_year_card(\n                saju," in body
-          and "st.session_state.astro_info," in body)
+          "saju=saju," in code
+          and "astro=st.session_state.astro_info," in code)
+
+    # 인자 이름을 붙여 넘기는지 (positional 로 넘기면 halmae_ai 쪽 인자가
+    # 하나만 바뀌어도 year_notes 가 api_key 자리로 밀려 들어갑니다)
+    call = code.split("ask_year_card(")[1].split(")")[0]
+    passed = [line.strip().rstrip(",").split("=")[0]
+              for line in call.splitlines() if line.strip()]
+    check("ask_year_card 호출이 전부 keyword argument 다",
+          all("=" in line for line in call.splitlines() if line.strip()),
+          " · ".join(passed))
+
+    # 넘기는 이름이 실제 parameter 이름과 맞는지 (틀리면 즉시 TypeError)
+    names = list(inspect.signature(halmae_ai.ask_year_card).parameters)
+    check("호출부가 쓰는 인자 이름이 ask_year_card 의 parameter 와 맞다",
+          all(name in names for name in passed),
+          f"호출부 {passed} / 정의 {names}")
+    print()
+
+
+# ===============================================================
+#  7. Gemini 호출 직전까지 — 실제 API 는 부르지 않습니다
+#
+#  ask_year_card() 를 앱과 똑같은 방식으로 부르고,
+#  Gemini 로 나가는 마지막 문(_generate_with_retry) 에서 붙잡아 멈춥니다.
+#  덕분에 "인자 타입 → 클라이언트 생성 → 프롬프트 조립" 전 구간을
+#  API 호출 없이 한 번에 확인할 수 있습니다.
+# ===============================================================
+class StoppedBeforeGemini(BaseException):
+    """Gemini 로 나가려는 순간 붙잡아 세우는 표시.
+
+    ask_year_card() 안에는 `except Exception` 이 있어서
+    보통의 예외로 만들면 HalmaeError 로 바뀌어 삼켜집니다.
+    검사용 표시가 그 그물에 걸리지 않도록 BaseException 을 씁니다.
+    """
+
+    def __init__(self, contents, config):
+        self.contents = contents
+        self.config = config
+
+
+def verify_up_to_gemini(saju, astro, year_ganji) -> None:
+    print("[GEMINI 호출 직전까지 — 실제 호출은 하지 않습니다]")
+
+    year_notes = year_luck_notes(saju, year_ganji)
+
+    # 앱이 넘기는 각 인자의 실제 타입을 눈으로 확인합니다.
+    arguments = {
+        "saju": saju,
+        "astro": astro,
+        "year_ganji": year_ganji,
+        "year_notes": year_notes,
+    }
+    for name, value in arguments.items():
+        print(f"      {name}: {type(value).__name__}")
+
+    check("saju 는 dict 다", isinstance(saju, dict))
+    check("astro 는 dict 또는 None 이다", astro is None or isinstance(astro, dict))
+    check("year_ganji 는 dict 다", isinstance(year_ganji, dict))
+    check("year_notes 는 list[str] 다",
+          isinstance(year_notes, list)
+          and all(isinstance(note, str) for note in year_notes),
+          f"{len(year_notes)}줄")
+
+    # api_key 는 keyword-only — 순서만 맞춘 5번째 인자를 받지 않습니다.
+    parameters = inspect.signature(halmae_ai.ask_year_card).parameters
+    check("api_key 는 keyword-only 라 positional 로 밀려 들어올 수 없다",
+          parameters["api_key"].kind is inspect.Parameter.KEYWORD_ONLY,
+          str(parameters["api_key"].kind))
+
+    # get_client 는 문자열 아닌 api_key 를 조용히 삼키지 않습니다.
+    try:
+        halmae_ai.get_client(api_key=year_notes)
+        check("get_client 가 list api_key 를 거부한다", False, "예외가 없었습니다")
+    except TypeError as exc:
+        check("get_client 가 list api_key 를 거부한다 (TypeError)",
+              "list" in str(exc))
+    except Exception as exc:
+        check("get_client 가 list api_key 를 거부한다", False,
+              f"{type(exc).__name__}: {exc}")
+
+    # --- Gemini 로 나가는 문만 막고 실제로 불러봅니다 -----------------
+    saved = (halmae_ai.USE_MOCK_AI,
+             halmae_ai.get_client,
+             halmae_ai._generate_with_retry)
+    try:
+        halmae_ai.USE_MOCK_AI = False               # Mock 우회로를 끕니다
+        halmae_ai.get_client = lambda api_key=None: "FAKE_CLIENT"
+
+        def stop(client, contents, config):
+            raise StoppedBeforeGemini(contents, config)
+
+        halmae_ai._generate_with_retry = stop
+
+        try:
+            halmae_ai.ask_year_card(
+                saju=saju,
+                astro=astro,
+                year_ganji=year_ganji,
+                year_notes=year_notes,
+            )
+            check("Gemini 호출 직전에서 멈췄다", False, "붙잡지 못했습니다")
+        except StoppedBeforeGemini as stopped:
+            check("타입 오류 없이 Gemini 호출 직전까지 갔다", True)
+            expected = build_year_card_payload(
+                saju, astro, year_ganji, year_notes
+            )
+            check("실제로 나가려던 contents 가 payload 와 같다",
+                  stopped.contents == expected["contents"])
+            text = stopped.contents[0]["parts"][0]["text"]
+            check("프롬프트는 문자열이다", isinstance(text, str))
+            check("year_notes 가 사람이 읽는 줄글로 들어갔다",
+                  all(note in text for note in year_notes),
+                  f"{len(year_notes)}줄 모두 포함")
+            check("프롬프트에 list 표기가 그대로 박히지 않았다",
+                  "['" not in text and "']" not in text)
+    finally:
+        (halmae_ai.USE_MOCK_AI,
+         halmae_ai.get_client,
+         halmae_ai._generate_with_retry) = saved
     print()
 
 
@@ -369,6 +489,7 @@ def main() -> int:
     verify_calculated_inputs(payload, saju, astro, year_ganji)
     verify_action_rules(payload)
     verify_app_call_site()
+    verify_up_to_gemini(saju, astro, year_ganji)
 
     print("=" * 64)
     if _failures:
