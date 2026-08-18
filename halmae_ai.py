@@ -1064,9 +1064,12 @@ def ask_year_card(
     # 행동은 최대 2개까지만 (카드가 길어지지 않게)
     card.actions = [a for a in card.actions if a.strip()][:2]
 
+    # 운영 로그에는 카드 '글'을 남기지 않습니다.
+    # 제목·키워드는 그 사람의 사주로 지어진 문구라 Gemini 응답 본문에 해당합니다.
+    # (내용을 봐야 할 때는 개발자 모드 화면이나 test_year_card_payload.py 를 씁니다)
     logger.info(
-        "올해의 카드 완료 · 모델 %s · %d %s / %s",
-        GEMINI_MODEL, card.year, card.title, card.keyword,
+        "올해의 카드 완료 · 모델 %s · %d년 카드 · 행동 %d개",
+        GEMINI_MODEL, card.year, len(card.actions),
     )
     return card
 

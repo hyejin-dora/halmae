@@ -21,6 +21,7 @@
     pyswisseph      천체 위치 (Moshier 내장 이론을 써서 별도 자료 파일이 필요 없습니다)
 """
 
+import logging
 from datetime import date, datetime, time, timezone
 from functools import lru_cache
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -31,6 +32,10 @@ from geopy.geocoders import Nominatim
 from timezonefinder import TimezoneFinder
 
 from saju import compute_calendar_info
+
+# 개발 로그 — 사용자에게는 짧은 안내만 보여주고, 진짜 원인은 여기 남깁니다.
+# 출생지역 원문·좌표는 적지 않습니다. (개인정보)
+logger = logging.getLogger("halmae.astrology")
 
 # Nominatim 이용 정책상 어떤 프로그램이 요청하는지 밝혀야 합니다.
 USER_AGENT = "halmae-mvp"
@@ -139,9 +144,15 @@ def to_utc(local_date: date, local_time: time, timezone_name: str) -> datetime:
     try:
         local_zone = ZoneInfo(timezone_name)
     except ZoneInfoNotFoundError as exc:
+        # 사용자에게는 무엇을 하면 되는지만 알려주고,
+        # 진짜 원인(서버에 tzdata 가 없음)은 개발 로그에 남깁니다.
+        logger.error(
+            "시간대 자료를 찾지 못했습니다 (%s) — 서버에 tzdata 를 설치해야 합니다.",
+            timezone_name,
+        )
         raise AstrologyError(
-            f"'{timezone_name}' 시간대 자료를 찾지 못했어요. "
-            "`pip install tzdata` 를 한 번 실행해주세요."
+            "별자리를 계산하는 데 필요한 시간대 자료를 불러오지 못했어요. "
+            "잠시 뒤에 다시 시도해주세요."
         ) from exc
 
     local_moment = datetime.combine(local_date, local_time, tzinfo=local_zone)

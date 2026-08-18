@@ -104,7 +104,11 @@ log = logging.getLogger("halmae.app")
 #             원본 응답 / 계산 원본 / 좌표 / 카드 열쇠 / 개발자용 문구
 #         켜는 법은 config.py 의 ★ 설정 3 을 보세요.
 #
-#     [Funnel 지표 화면]  예전 그대로 주소 뒤 ?dev=<HALMAE_DEV_KEY>.
+#     [Funnel 지표 화면]  주소 뒤 ?dev=<HALMAE_DEV_KEY>.
+#         HALMAE_DEV_KEY 를 정해두지 않으면 어떤 주소로도 열리지 않습니다.
+#         (예전에는 열쇠가 없으면 ?dev=1 만으로도 열렸습니다. 그러면 배포된 앱에서
+#          저장소 상태와 원본 이벤트(session_id)가 노출되므로 잠긴 쪽을 기본으로
+#          바꿨습니다 — analytics.dev_dashboard_allowed)
 #         지표만 보는 화면이라 개인정보도 프롬프트도 나오지 않습니다.
 # ---------------------------------------------------------------
 try:
@@ -494,8 +498,8 @@ def render_disclaimer() -> None:
     """결과 화면 맨 아래 · 서비스 성격 고지."""
     st.markdown(
         '<div class="halmae-disclaimer">'
-        "할매의 이야기는 사주·점성술을 활용한 엔터테인먼트 및 자기성찰용 콘텐츠입니다.\n"
-        "건강, 투자, 법률 등 중요한 결정은 전문적인 판단을 대신하지 않습니다."
+        "본 서비스는 사주·점성술을 활용한 오락·자기성찰용 콘텐츠이며,\n"
+        "의료·법률·투자 등 전문적인 판단을 대신하지 않습니다."
         "</div>",
         unsafe_allow_html=True,
     )
@@ -1420,11 +1424,11 @@ def render_premium() -> None:
     # --- 아직 답을 고르지 않았으면 두 버튼을 보여줍니다 ----------
     if st.session_state.purchase_intent is None:
         yes_col, no_col = st.columns(2)
-        if yes_col.button("네, 이용해보고 싶어요", type="primary", key="intent_yes", width="stretch"):
+        if yes_col.button("이용해보고 싶어요", type="primary", key="intent_yes", width="stretch"):
             track_action("purchase_intent_yes")
             st.session_state.purchase_intent = "yes"
             st.rerun()
-        if no_col.button("조금 더 고민해볼게요", type="secondary", key="intent_no", width="stretch"):
+        if no_col.button("아직은 아니에요", type="secondary", key="intent_no", width="stretch"):
             track_action("purchase_intent_no")
             st.session_state.purchase_intent = "no"
             st.rerun()
@@ -1580,13 +1584,14 @@ def render_result() -> None:
 #  개발자 전용 · Funnel 분석 화면
 #
 #  일반 사용자에게는 보이지 않습니다.
-#  주소 뒤에 ?dev=1 을 붙였을 때만 이 화면이 열립니다.
-#      내 컴퓨터   http://localhost:8501/?dev=1
-#
-#  배포한 뒤에는 반드시 암호를 정해두세요. 주소만 알면 누구나 지표를 보게 됩니다.
+#  HALMAE_DEV_KEY 를 정해두고, 그 값을 주소에 붙였을 때만 열립니다.
 #      내 컴퓨터   export HALMAE_DEV_KEY="아무거나정한암호"
+#                 http://localhost:8501/?dev=아무거나정한암호
 #      Cloud      Settings → Secrets 에  HALMAE_DEV_KEY = "아무거나정한암호"
-#      → https://<내앱>.streamlit.app/?dev=아무거나정한암호
+#                 https://<내앱>.streamlit.app/?dev=아무거나정한암호
+#
+#  열쇠를 정해두지 않으면 이 화면은 아예 열리지 않습니다. (배포 기본값)
+#  8자 미만이거나 1 · dev · test 처럼 뻔한 값도 열쇠로 인정하지 않습니다.
 # ===============================================================
 def render_storage_status() -> None:
     """지금 로그가 어디에 저장되고 있는지, 실패한 건 없는지 한눈에 보여줍니다.

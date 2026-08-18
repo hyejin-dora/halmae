@@ -105,6 +105,16 @@ FEEDBACK_FIELDNAMES = [
 
 DEFAULT_CSV_PATH = Path(__file__).parent / "data" / "events.csv"
 
+# 개발자 Funnel 화면(?dev=...)을 여는 열쇠로 인정하지 않는 값들.
+# 이 정도 값은 누구나 한 번에 맞히므로 잠근 것이 아닙니다.
+WEAK_DEV_KEYS = frozenset({
+    "1", "0", "dev", "test", "true", "false", "yes", "no",
+    "admin", "halmae", "password", "secret",
+})
+
+# 열쇠는 이 길이 이상이어야 인정합니다.
+MIN_DEV_KEY_LENGTH = 8
+
 
 # ===============================================================
 #  1. 익명 사용자 ID
@@ -866,21 +876,31 @@ def format_funnel_text(summary: dict | None = None) -> str:
 def dev_dashboard_allowed(query_value: str | None) -> bool:
     """주소창에 ?dev=... 를 붙였을 때 분석 화면을 보여줘도 되는지 판단합니다.
 
-    HALMAE_DEV_KEY 를 정해두면 그 값과 똑같아야만 열립니다.
+    [잠긴 문이 기본입니다]
+        HALMAE_DEV_KEY 를 정해두지 않으면 어떤 주소로도 열리지 않습니다.
+        예전에는 열쇠가 없을 때 ?dev=1 만으로도 열렸는데, 그러면 배포된 앱에서
+        주소만 아는 사람이 저장소 상태(Supabase 주소·연결 오류)와
+        원본 이벤트(session_id 목록)를 그대로 볼 수 있었습니다.
+        실사용자에게 공유하는 앱이라 '깜빡 잊으면 열리는' 쪽이 아니라
+        '깜빡 잊으면 닫히는' 쪽으로 뒤집었습니다.
+
+    열쇠를 정해두면 그 값과 똑같아야만 열립니다.
         내 컴퓨터    export HALMAE_DEV_KEY="아무거나정한암호"
         Cloud       Settings → Secrets 에  HALMAE_DEV_KEY = "아무거나정한암호"
         → https://.../?dev=아무거나정한암호
 
-    정해두지 않았으면 개발 편의를 위해 ?dev=1 만으로도 열립니다.
-    (배포한 뒤에는 반드시 HALMAE_DEV_KEY 를 정해두세요.
-     주소만 알면 누구나 지표를 볼 수 있게 되니까요.)
+    너무 쉬운 값(1 · dev · true 같은 것)은 사실상 잠그지 않은 것과 같아서
+    열쇠로 인정하지 않습니다.
     """
     if not query_value:
         return False
     expected = get_secret("HALMAE_DEV_KEY", "").strip()
-    if expected:
-        return query_value == expected
-    return query_value not in ("", "0", "false", "False")
+    if not expected:
+        # 열쇠가 없으면 열지 않습니다. (배포 기본값)
+        return False
+    if expected.lower() in WEAK_DEV_KEYS or len(expected) < MIN_DEV_KEY_LENGTH:
+        return False
+    return query_value == expected
 
 
 # ---------------------------------------------------------------

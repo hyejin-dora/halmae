@@ -686,7 +686,9 @@ def _css_cards(t: dict) -> str:
     }}
 
     /* ===== 명식 칸 · 파이썬이 계산한 확정값 =========================
-       할매의 글이 아니라 계산 결과를 그대로 보여주는 자리입니다. */
+       할매의 글이 아니라 계산 결과를 그대로 보여주는 자리입니다.
+       값(경오(庚午))은 줄을 접을 수 있게 둡니다 — 예전에 한 줄로 고정했더니
+       좁은 화면에서 칸 밖으로 삐져나가 좌우 스크롤이 생겼습니다. */
     .halmae-myeongsik-row {{
         display: flex;
         flex-wrap: wrap;
@@ -714,7 +716,8 @@ def _css_cards(t: dict) -> str:
         font-weight: 700;
         color: {t['gold_bright']};
         line-height: 1.4;
-        white-space: nowrap;
+        word-break: keep-all;
+        overflow-wrap: anywhere;
     }}
 
     /* ===== 대사 상자 · 그대로 읽어도 되는 문장 ===================== */
@@ -845,6 +848,9 @@ def _css_yearcard(t: dict) -> str:
     }}
     .halmae-yearcard-title {{
         font-family: {t['font_latin']};
+        /* 한글 제목이 낱말 중간에서 끊기지 않도록 (좁은 화면에서 특히) */
+        word-break: keep-all;
+        overflow-wrap: anywhere;
         font-size: 2.15rem;
         font-weight: 600;
         letter-spacing: 0.1em;
@@ -884,7 +890,15 @@ def _css_yearcard(t: dict) -> str:
 
 
 def _css_feedback_premium(t: dict) -> str:
-    """피드백 · Premium"""
+    """피드백 · Premium
+
+    [지운 것 · 되살리지 마세요]
+        예전에는 이모지 위젯(st.feedback)을 함께 썼습니다. 그래서
+        "할매 말, 잘 맞았나요?" 아래에 이모지 위젯과 버튼이 나란히 떠
+        같은 질문이 두 번 보였고, 어느 쪽이 진짜 답인지 헷갈렸습니다.
+        지금은 버튼 두 개만 씁니다(app.render_feedback).
+        그에 맞춰 이모지 위젯용 CSS 와 .halmae-feedback-hint 도 지웠습니다.
+    """
     return f"""
     /* ===== 피드백 ================================================= */
     .halmae-feedback-title {{
@@ -894,27 +908,6 @@ def _css_feedback_premium(t: dict) -> str:
         font-weight: 700;
         color: {t['gold_bright']};
         margin: 1.4rem 0 0.35rem 0;
-    }}
-    .halmae-feedback-hint {{
-        text-align: center;
-        font-size: 0.78rem;
-        letter-spacing: 0.05em;
-        color: {t['ivory_low']};
-        margin: 0 0 0.7rem 0;
-    }}
-    div[data-testid="stFeedback"] {{
-        display: flex; justify-content: center; gap: 0.8rem;
-    }}
-    div[data-testid="stFeedback"] button {{
-        width: 62px !important; height: 54px !important;
-        border-radius: {t['radius_card']} !important;
-        border: 1px solid {t['line_gold']} !important;
-        background: {t['bg_panel']} !important;
-    }}
-    div[data-testid="stFeedback"] button span {{ font-size: 1.5rem !important; }}
-    div[data-testid="stFeedback"] button:hover {{
-        background: {t['bg_raised']} !important;
-        border-color: {t['royal_red_line']} !important;
     }}
 
     /* ===== Premium · 비밀 서랍 ====================================
@@ -1102,6 +1095,115 @@ def _css_dev(t: dict) -> str:
         border: 1px solid {t['line']};
         border-radius: {t['radius_card']};
     }}
+    /* 카드 복사용 글상자는 줄을 접어서 보여줍니다 (좌우 스크롤 방지) */
+    .stCode pre, .stCode code, pre code {{
+        white-space: pre-wrap !important;
+        word-break: break-word;
+    }}
+    """
+
+
+def _css_mobile(t: dict) -> str:
+    """좁은 화면 손질 — 디자인은 그대로 두고 크기만 줄입니다.
+
+    이 앱은 처음부터 모바일을 보고 만들었지만(.block-container 480px),
+    아이폰 SE 같은 320~390px 폭에서는 아래 네 곳이 실제로 문제였습니다.
+
+        1. 두 칸 버튼          st.columns(2) 안의 버튼 글자가 눌려 잘렸습니다.
+                              (👍 맞아요 / 👎 아니에요 · 구매 의향 두 버튼)
+        2. 올해의 카드 제목    2.15rem 이라 세 줄로 늘어지고 좌우가 답답했습니다.
+        3. 명식 칸            여섯 글자(경오(庚午))가 칸 밖으로 삐져나왔습니다.
+        4. 좌우 여백          1.35rem 씩 빠져 본문 폭이 실제로 더 좁았습니다.
+
+    [고치는 방법]
+      · 색·서체·테두리는 하나도 바꾸지 않습니다. (Korean Occult / Royal Heritage 유지)
+      · 글자 크기와 여백만 한 단계 줄입니다.
+      · 두 칸 버튼은 칸 하나의 최소 폭을 정해두어, 그보다 좁아지면
+        Streamlit 이 알아서 위아래로 쌓게 합니다. (버튼이 화면 밖으로 나가지 않음)
+
+    폭 기준을 480px 로 잡은 이유: .block-container 의 최대 폭이 480px 이라
+    그보다 좁은 화면에서만 실제로 눌리기 때문입니다.
+    """
+    return f"""
+    /* ===== 두 칸 배치는 좁아지면 위아래로 쌓습니다 ================== */
+    div[data-testid="stHorizontalBlock"] {{
+        flex-wrap: wrap;
+    }}
+    div[data-testid="stColumn"], div[data-testid="column"] {{
+        min-width: 8.5rem;
+    }}
+
+    /* 버튼 글자는 어떤 폭에서도 잘리지 않게 (한 줄에 안 들어가면 두 줄로) */
+    .stButton > button p {{
+        white-space: normal;
+        word-break: keep-all;
+        overflow-wrap: anywhere;
+        line-height: 1.35;
+    }}
+
+    @media (max-width: 480px) {{
+        /* 좌우 여백을 줄여 본문 폭을 되찾습니다 */
+        .block-container {{
+            padding: 1.9rem 1rem 4rem 1rem;
+        }}
+
+        /* 첫 화면 · 상단 타이틀 */
+        .halmae-lead {{ font-size: 1.28rem; line-height: 1.85; }}
+        .halmae-desc {{ font-size: 0.9rem; }}
+        .halmae-title-sm {{ font-size: 2.4rem; }}
+        .halmae-latin {{
+            font-size: 0.85rem;
+            letter-spacing: 0.45em;
+            text-indent: 0.45em;
+        }}
+
+        /* 버튼 — 두 칸으로 나뉜 자리에서는 한 단계 더 작게 */
+        .stButton > button {{
+            font-size: 0.98rem;
+            letter-spacing: 0.03em;
+            padding: 0.85rem 0.7rem;
+        }}
+        div[data-testid="stHorizontalBlock"] .stButton > button {{
+            font-size: 0.9rem;
+            letter-spacing: 0.01em;
+            padding: 0.8rem 0.4rem;
+        }}
+
+        /* 명식 칸 — 여섯 글자가 들어가도 테두리 안에 머물게 */
+        .halmae-myeongsik-cell {{
+            flex: 1 1 3.6rem;
+            min-width: 3.6rem;
+            padding: 0.5rem 0.2rem;
+        }}
+        .halmae-myeongsik-value {{ font-size: 0.92rem; }}
+
+        /* 올해의 카드 */
+        .halmae-yearcard {{ padding: 1.7rem 0.9rem 1.5rem 0.9rem; }}
+        .halmae-yearcard-title {{
+            font-size: 1.6rem;
+            letter-spacing: 0.04em;
+        }}
+        .halmae-yearcard-message {{ font-size: 1.02rem; line-height: 1.9; }}
+
+        /* Premium */
+        .halmae-premium {{ padding: 1.5rem 0.9rem; }}
+        .halmae-premium-title {{ font-size: 1.16rem; }}
+        .halmae-premium-price {{ font-size: 1.3rem; }}
+        .halmae-fakedoor {{ padding: 1.1rem 0.9rem; }}
+
+        /* 본문 카드 · 대사 상자 */
+        .halmae-card {{ padding: 1rem 0.9rem; }}
+        .halmae-quote {{ padding: 1rem 0.9rem; font-size: 1rem; }}
+        .halmae-script {{ padding: 0.75rem 0.8rem; }}
+    }}
+
+    /* 아주 좁은 화면(구형 아이폰 SE 320px) */
+    @media (max-width: 360px) {{
+        .block-container {{ padding-left: 0.8rem; padding-right: 0.8rem; }}
+        .halmae-title-sm {{ font-size: 2.1rem; }}
+        .halmae-yearcard-title {{ font-size: 1.42rem; }}
+        .halmae-myeongsik-value {{ font-size: 0.86rem; }}
+    }}
     """
 
 
@@ -1118,6 +1220,8 @@ def build_css() -> str:
         _css_feedback_premium(t),
         _css_notice(t),
         _css_dev(t),
+        # 좁은 화면 손질은 반드시 맨 뒤에. (같은 선택자를 이겨야 합니다)
+        _css_mobile(t),
     ]
     # 웹폰트 <link> + 스타일을 한 덩어리로 돌려줍니다.
     return font_links() + "<style>\n" + "\n".join(blocks) + "\n</style>"
