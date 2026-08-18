@@ -4,8 +4,10 @@
 새로고침할 때마다 다른 카드가 나오면 믿음이 가지 않으니,
 같은 사람이 같은 해에 물으면 늘 같은 카드가 나오도록 저장해둡니다.
 
-    python card_store.py             # 지금까지 만들어진 카드 목록
-    python card_store.py --clear     # 전부 지우기 (개발 중 다시 뽑고 싶을 때)
+    python card_store.py                       # 지금까지 만들어진 카드 목록
+    python card_store.py --delete <열쇠앞자리>   # 그 카드 한 장만 지우기
+    python card_store.py --clear               # 로컬 파일만 비우기 (개발용)
+    python card_store.py --sql                 # Supabase 에서 지우는 SQL 보기
 
 [어떻게 같은 카드가 나오게 하나]
     1) 카드를 결정하는 값들을 한 줄로 이어 붙입니다.
@@ -228,6 +230,10 @@ class CardStore:
     def all_records(self) -> dict:
         raise NotImplementedError
 
+    def delete(self, key: str) -> bool:
+        """열쇠 하나에 해당하는 카드만 지웁니다. 지웠으면 True."""
+        raise NotImplementedError
+
 
 class JsonCardStore(CardStore):
     """개발용 — data/cards.json 파일 하나에 모아둡니다."""
@@ -274,6 +280,19 @@ class JsonCardStore(CardStore):
         with self._lock:
             return self._read()
 
+    def delete(self, key: str) -> bool:
+        with self._lock:
+            data = self._read()
+            if key not in data:
+                return False
+            del data[key]
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.path.with_suffix(".json.tmp")
+            with temporary.open("w", encoding="utf-8") as file:
+                json.dump(data, file, ensure_ascii=False, indent=2)
+            temporary.replace(self.path)
+            return True
+
 
 class MemoryCardStore(CardStore):
     """테스트용 — 파일을 만들지 않고 메모리에만 담아둡니다."""
@@ -290,6 +309,9 @@ class MemoryCardStore(CardStore):
 
     def all_records(self) -> dict:
         return dict(self.records)
+
+    def delete(self, key: str) -> bool:
+        return self.records.pop(key, None) is not None
 
 
 class SupabaseCardStore(CardStore):
@@ -386,6 +408,36 @@ class SupabaseCardStore(CardStore):
             }
         return records
 
+    def delete(self, key: str) -> bool:
+        """열쇠 하나짜리 줄만 지웁니다.
+
+        .eq("stable_key", key) 없이 delete() 를 부르면 테이블이 통째로 비어버리므로,
+        열쇠가 빈 값이면 아무것도 하지 않고 돌아섭니다. (실수 방지)
+        """
+        if not key:
+            return False
+        client = db.get_client()
+        if client is None:
+            return self.fallback.delete(key) if self.fallback else False
+        try:
+            rows = (
+                client.table(db.CARDS_TABLE)
+                .delete()
+                .eq("stable_key", key)
+                .execute()
+            ).data or []
+        except Exception as exc:
+            db.record_failure("cards delete", exc, key[:16])
+            return False
+        deleted = len(rows) > 0
+        # 로컬 대체 파일에도 같은 열쇠가 남아 있을 수 있어 함께 지웁니다.
+        if self.fallback is not None:
+            try:
+                deleted = self.fallback.delete(key) or deleted
+            except Exception:
+                pass
+        return deleted
+
     def _to_fallback(self, key: str, card: dict, year: int, model: str) -> None:
         """Supabase 에 못 넣은 카드를 로컬 파일에 적어둡니다. (유실 방지)"""
         if self.fallback is None:
@@ -444,28 +496,46 @@ def save_card(key: str, card: dict, year: int, model: str) -> None:
         pass
 
 
+def delete_card(key: str) -> bool:
+    """열쇠 하나에 해당하는 카드만 지웁니다. (개발 중 다시 뽑고 싶을 때)
+
+    지우는 범위는 딱 그 한 줄입니다. 테이블을 비우는 길은 없습니다.
+    """
+    if not key:
+        return False
+    try:
+        return bool(_store.delete(key))
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------
 #  터미널에서 확인하기
-#      python card_store.py
-#      python card_store.py --clear
+#      python card_store.py                      저장된 카드 목록
+#      python card_store.py --delete <열쇠앞자리>  그 카드 한 장만 지우기
+#      python card_store.py --clear              로컬 파일만 비우기 (개발용)
+#      python card_store.py --sql                Supabase 에서 지우는 SQL 보기
+#
+#  --delete 는 열쇠 앞자리(8자 이상)로 찾습니다.
+#  목록에 찍히는 앞 16자를 그대로 붙여 넣으면 됩니다.
+#  여러 장이 걸리면 아무것도 지우지 않고 멈춥니다. (실수 방지)
 # ---------------------------------------------------------------
-if __name__ == "__main__":
-    import sys
+DELETE_SQL = """-- Supabase Dashboard → SQL Editor 에 붙여 넣으세요.
+-- 1) 무엇이 지워질지 먼저 눈으로 확인합니다. (개인정보는 이 테이블에 없습니다)
+select stable_key, card_year, created_at, card_data->>'title' as title
+from public.cards
+where card_year = {year}
+order by created_at desc;
 
-    if "--clear" in sys.argv:
-        # 로컬 파일만 지웁니다. Supabase 는 실수로 지우면 되돌릴 수 없으므로
-        # 여기서 건드리지 않고 Supabase Dashboard 에서 직접 지우게 합니다.
-        if DEFAULT_JSON_PATH.exists():
-            DEFAULT_JSON_PATH.unlink()
-            print(f"지웠습니다: {DEFAULT_JSON_PATH}")
-        else:
-            print("지울 파일이 없습니다.")
-        if db.use_supabase():
-            print("※ Supabase 에 저장된 카드는 지우지 않았습니다. "
-                  "(Dashboard → Table Editor → cards 에서 직접 지우세요)")
-        sys.exit(0)
+-- 2) 위 목록에서 지울 줄의 stable_key 를 그대로 넣어 한 줄만 지웁니다.
+delete from public.cards
+where stable_key = '여기에_위에서_고른_stable_key_붙여넣기';
 
-    records = get_store().all_records()
+-- where 절 없는 delete 는 절대 쓰지 마세요. 테이블이 통째로 비워집니다.
+-- 카드를 지우면 다음 접속에서 같은 열쇠로 새 카드가 만들어집니다."""
+
+
+def _print_records(records: dict) -> None:
     print(f"[저장된 올해의 카드]  저장소: {storage_label()}")
     print(f"총 {len(records)}장")
     print()
@@ -475,3 +545,61 @@ if __name__ == "__main__":
               f"{card.get('title', '?'):<20} {card.get('keyword', '')}")
         print(f"      만든 때 {record.get('created_at', '?')} · "
               f"모델 {record.get('model', '?')}")
+        actions = card.get("actions") or []
+        for action in actions:
+            print(f"      행동 · {action}")
+
+
+if __name__ == "__main__":
+    import sys
+
+    argv = sys.argv[1:]
+
+    if "--sql" in argv:
+        print(DELETE_SQL.format(year=datetime.now(timezone.utc).year))
+        sys.exit(0)
+
+    if "--delete" in argv:
+        position = argv.index("--delete")
+        prefix = argv[position + 1] if len(argv) > position + 1 else ""
+        prefix = prefix.strip().rstrip("…")
+        if len(prefix) < 8:
+            print("지울 카드의 열쇠 앞자리를 8자 이상 적어주세요.")
+            print("  예) python card_store.py --delete 3f9a12bc4d5e6f70")
+            print("  앞자리는 python card_store.py 목록에 찍힙니다.")
+            sys.exit(2)
+
+        matches = [
+            key for key in get_store().all_records() if key.startswith(prefix)
+        ]
+        if not matches:
+            print(f"'{prefix}' 로 시작하는 카드가 없습니다.")
+            sys.exit(1)
+        if len(matches) > 1:
+            print(f"'{prefix}' 로 시작하는 카드가 {len(matches)}장입니다. "
+                  "앞자리를 더 길게 적어 한 장만 고르세요.")
+            sys.exit(1)
+
+        if delete_card(matches[0]):
+            print(f"지웠습니다: {matches[0][:16]}… (1장)")
+            print("다음 접속에서 같은 열쇠로 카드가 새로 만들어집니다.")
+        else:
+            print("지우지 못했습니다. 저장소 연결을 확인해주세요.")
+            sys.exit(1)
+        sys.exit(0)
+
+    if "--clear" in argv:
+        # 로컬 파일만 지웁니다. Supabase 는 실수로 지우면 되돌릴 수 없으므로
+        # 여기서 건드리지 않고 --delete 로 한 장씩, 또는 Dashboard 에서 지웁니다.
+        if DEFAULT_JSON_PATH.exists():
+            DEFAULT_JSON_PATH.unlink()
+            print(f"지웠습니다: {DEFAULT_JSON_PATH}")
+        else:
+            print("지울 파일이 없습니다.")
+        if db.use_supabase():
+            print("※ Supabase 에 저장된 카드는 지우지 않았습니다.")
+            print("   한 장만 지우려면  python card_store.py --delete <열쇠앞자리>")
+            print("   SQL 로 지우려면   python card_store.py --sql")
+        sys.exit(0)
+
+    _print_records(get_store().all_records())

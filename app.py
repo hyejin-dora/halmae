@@ -1056,8 +1056,12 @@ STEP_RENDERERS = {1: render_step1, 2: render_step2, 3: render_step3}
 # ---------------------------------------------------------------
 #  올해의 카드
 #
-#  Step 1~3 이야기 + 파이썬이 계산한 올해 간지(세운)를 합쳐
+#  파이썬이 계산한 사주·점성술 값 + 올해 간지(세운)만으로
 #  올해를 한 장으로 압축합니다. 아직 이미지는 만들지 않고 글자로만 보여줍니다.
+#
+#  [정책] 카드는 "같은 사람 + 같은 출생정보 + 같은 해"에 딱 한 장입니다.
+#  연애로 들어와도 취업으로 들어와도 같은 카드가 나와야 하므로,
+#  고민 분야·추가 질문·Step1~3 응답은 열쇠에도, 프롬프트에도 넣지 않습니다.
 # ---------------------------------------------------------------
 def ensure_year_card() -> None:
     """올해의 카드를 준비합니다.
@@ -1124,8 +1128,13 @@ def ensure_year_card() -> None:
     # --- 3. 없을 때만 Gemini를 부르고, 받은 카드를 저장합니다 -----
     with st.spinner(YEAR_CARD_LOADING):
         try:
+            # 1~3단계 대화(history)는 일부러 넘기지 않습니다.
+            # 그 안에는 고민 분야·추가 질문·Step1~3 응답이 들어 있어서,
+            # 넘기면 카드에 "이력서를 고쳐 써라" 같은 고민 전용 행동이 박힙니다.
+            # 카드는 계산이 끝난 값(사주·점성술·올해 간지)만으로 만듭니다.
             card = ask_year_card(
-                st.session_state.history,
+                saju,
+                st.session_state.astro_info,
                 year_ganji,
                 year_luck_notes(saju, year_ganji),
             )
@@ -1149,6 +1158,24 @@ def ensure_year_card() -> None:
             st.session_state.year_card_error = (
                 "카드를 뽑는 중 알 수 없는 문제가 생겼어요."
             )
+
+
+def redraw_year_card() -> None:
+    """저장된 카드 한 장만 버리고 다시 뽑게 합니다. (개발용)
+
+    지우는 범위는 지금 세션의 열쇠 한 줄뿐입니다.
+    다른 사람의 카드나 cards 테이블 전체는 건드리지 않습니다.
+
+    테스트하는 동안 고민 정보가 섞여 만들어진 카드가 남아 있을 때,
+    Supabase 를 열지 않고 화면에서 바로 버릴 수 있게 두었습니다.
+    """
+    key = st.session_state.year_card_key
+    if key:
+        removed = card_store.delete_card(key)
+        log.info("올해의 카드 다시 뽑기 · 지움=%s · key=%s", removed, key[:16])
+    st.session_state.year_card = None
+    st.session_state.year_card_error = None
+    st.session_state.year_card_cached = False
 
 
 def render_year_card() -> None:
@@ -1216,19 +1243,31 @@ def render_year_card() -> None:
     st.caption("카드를 저장하거나 나눠보고 싶으면 아래 글을 복사하세요.")
     st.code(format_year_card_text(card, ganji), language="text")
 
-    # 개발자 확인용 — 열쇠가 어떻게 만들어졌고, 저장된 걸 꺼내 썼는지
-    # 지문(fingerprint)에는 생년월일·좌표가 들어 있어 USE_DEV_MODE 일 때만.
-    if USE_DEV_MODE and st.checkbox("카드 열쇠 보기 (개발자용)", key="show_card_key"):
+    # 개발자 확인용 -----------------------------------------------
+    #  · 저장된 걸 꺼내 썼는지 / 새로 만들었는지는 늘 보여줍니다.
+    #  · 열쇠와 지문에는 생년월일·좌표가 들어 있어 따로 눌러야 보입니다.
+    #  · '이 카드만 다시 뽑기' 는 지금 이 열쇠 한 줄만 지웁니다.
+    #    (테스트 중 고민이 섞여 만들어진 카드를 버릴 때 씁니다)
+    if USE_DEV_MODE:
         st.caption(
             ("저장된 카드를 그대로 꺼내 썼어요 (Gemini 호출 없음)"
              if st.session_state.year_card_cached
              else "새로 만들어 저장했어요 (Gemini 1회 호출)")
         )
-        st.code(
-            f"key         : {st.session_state.year_card_key}\n"
-            f"fingerprint : {st.session_state.year_card_fingerprint}",
-            language="text",
-        )
+        if st.button("이 카드만 다시 뽑기 (개발자용)",
+                     type="secondary", key="year_card_redraw", width="stretch"):
+            redraw_year_card()
+            st.rerun()
+        if st.checkbox("카드 열쇠 보기 (개발자용)", key="show_card_key"):
+            st.caption(
+                "아래 지문에는 생년월일·좌표가 들어 있어요. "
+                "화면을 캡처해 공유하지 마세요."
+            )
+            st.code(
+                f"key         : {st.session_state.year_card_key}\n"
+                f"fingerprint : {st.session_state.year_card_fingerprint}",
+                language="text",
+            )
 
 
 # ---------------------------------------------------------------

@@ -94,7 +94,7 @@ class HalmaeError(Exception):
 #  1. 할매 캐릭터 · 답변 원칙 · 안전 규칙
 #     모든 단계에 공통으로 붙는 지시문입니다.
 # ===============================================================
-SYSTEM_INSTRUCTION = """너는 "할매"다. 만 년 동안 세상사를 지켜본 것 같은, 강인하고 현실적인 할머니 상담가다.
+_PERSONA_TEMPLATE = """너는 "할매"다. 만 년 동안 세상사를 지켜본 것 같은, 강인하고 현실적인 할머니 상담가다.
 
 [캐릭터]
 - 무조건 다정하게 위로하는 상담가가 아니다.
@@ -123,7 +123,7 @@ SYSTEM_INSTRUCTION = """너는 "할매"다. 만 년 동안 세상사를 지켜�
 모든 주요 해석에는 반드시 근거가 있어야 한다.
 "너는 추진력이 강하다" 라고만 쓰지 말고 다음 순서로 쓴다.
 
-  1) 사주/점성술 근거  →  2) 성향 또는 상황 해석  →  3) 현재 고민과의 연결
+  1) 사주/점성술 근거  →  2) 성향 또는 상황 해석  →  3) {linking_step}
 
 예시 (아래 대괄호 자리에는 반드시 CALCULATED_SAJU 에 적힌 값을 그대로 넣는다.
       이 예시에 적힌 글자를 그대로 베껴 쓰지 마라. 자리 모양만 참고하라):
@@ -164,12 +164,43 @@ SYSTEM_INSTRUCTION = """너는 "할매"다. 만 년 동안 세상사를 지켜�
 - 분량을 늘리려고 같은 내용을 다른 표현으로 되풀이하지 마라.
   사용자가 스크롤을 내릴 때마다 새로운 해석이나 새로운 정보가 나와야 한다.
 - 누구에게나 적용되는 자기계발 조언은 쓰지 마라.
-  반드시 이 사용자의 사주 데이터, 점성술 데이터, 고민 분야, 추가 질문을 서로 연결한다.
+  {ground_rule}
 
 [형식]
 - 정해진 JSON 구조로만 답한다. 마크다운 제목이나 코드펜스는 쓰지 않는다.
 - 각 항목 안에서는 줄바꿈을 써도 좋다.
 - 항목 이름(예: "근거:", "행동:")을 본문 안에 다시 적지 마라. 구조가 이미 나누어져 있다."""
+
+
+# 1~3단계는 "지금 이 고민"에 답하는 상담이라 고민과 연결해서 해석합니다.
+STEP_LINKING_STEP = "현재 고민과의 연결"
+STEP_GROUND_RULE = (
+    "반드시 이 사용자의 사주 데이터, 점성술 데이터, "
+    "고민 분야, 추가 질문을 서로 연결한다."
+)
+
+# 올해의 카드는 "그 사람의 그 해를 대표하는 한 장"입니다.
+# 어떤 고민으로 들어와도 같은 카드가 나와야 하므로,
+# 페르소나 단계에서부터 '고민과 연결하라'는 지시를 빼둡니다.
+# (고민 정보가 프롬프트에 없는데 연결하라고 시키면 모델이 고민을 지어냅니다)
+CARD_LINKING_STEP = "올해 한 해 전체를 관통하는 하나의 태도"
+CARD_GROUND_RULE = (
+    "반드시 이 사용자의 사주 데이터, 점성술 데이터, "
+    "올해의 간지(세운)만을 서로 연결한다. "
+    "연애·취업·돈·인간관계 같은 특정 고민 분야를 골라 답하지 마라. "
+    "고민 정보는 주어지지 않았다. 있다고 가정하거나 지어내지 마라."
+)
+
+SYSTEM_INSTRUCTION = _PERSONA_TEMPLATE.format(
+    linking_step=STEP_LINKING_STEP,
+    ground_rule=STEP_GROUND_RULE,
+)
+
+# 올해의 카드 전용 — 고민에서 독립된 페르소나
+YEAR_CARD_SYSTEM_INSTRUCTION = _PERSONA_TEMPLATE.format(
+    linking_step=CARD_LINKING_STEP,
+    ground_rule=CARD_GROUND_RULE,
+)
 
 
 # ===============================================================
@@ -315,6 +346,10 @@ class YearCard(BaseModel):
 
     저장하거나 남에게 보여주고 싶을 만큼 간결해야 합니다.
     길게 쓰면 카드가 아니라 또 하나의 보고서가 됩니다.
+
+    [정책] 카드는 "같은 사람 + 같은 출생정보 + 같은 해"에 하나만 존재합니다.
+    연애로 들어와도, 취업으로 들어와도 같은 카드가 나와야 합니다.
+    그래서 이 카드의 어느 칸도 고민 분야·추가 질문·1~3단계 답변에 기대지 않습니다.
     """
 
     year: int = Field(description="카드의 연도. 주어진 연도를 그대로 적을 것.")
@@ -332,15 +367,20 @@ class YearCard(BaseModel):
     )
     basis: str = Field(
         description="왜 이 카드가 나왔는지. 올해의 간지(세운)와 이 사람의 사주·점성술을 "
-        "연결해서 2~3문장, 150자 안팎. 명리학/점성술의 해석임이 드러나게 쓸 것."
+        "연결해서 2~3문장, 150자 안팎. 명리학/점성술의 해석임이 드러나게 쓸 것. "
+        "특정 고민(연애·취업·돈 등)을 근거로 들지 말 것."
     )
     actions: list[str] = Field(
-        description="올해 가장 중요한 행동 1~2개. 각각 40자 안팎의 한 문장 명령형. "
-        "추상적인 말 금지. 3개 이상 넣지 말 것."
+        description="올해 가장 중요한 행동 원칙 1~2개. 각각 40자 안팎의 한 문장 명령형. "
+        "여러 삶의 영역(일·관계·돈·건강)에 그대로 옮겨 적용할 수 있는 원칙일 것. "
+        "'이력서를 써라' · '소개팅에 나가라' · '투자를 해라' 처럼 특정 고민 분야에만 "
+        "맞는 행동은 금지. 대신 '미뤄온 결정 하나를 이번 달에 매듭지어라' 처럼 "
+        "구체적이면서 영역에 묶이지 않게 쓸 것. 추상적인 말 금지. 3개 이상 넣지 말 것."
     )
     caution: str = Field(
         description="올해 조심해야 할 패턴 딱 1개. 60자 안팎. "
-        "'이런 상황이 오면 너는 이렇게 하더라' 식으로 구체적인 버릇을 짚을 것."
+        "'이런 상황이 오면 너는 이렇게 하더라' 식으로 구체적인 버릇을 짚을 것. "
+        "특정 고민 분야가 아니라, 어느 영역에서든 되풀이되는 버릇으로 쓸 것."
     )
 
 
@@ -798,6 +838,16 @@ def ask_halmae(
 
 # ===============================================================
 #  6. 올해의 카드
+#
+#  [정책] 카드는 "같은 사람 + 같은 출생정보 + 같은 해"에 딱 한 장입니다.
+#  어떤 고민(연애·취업·돈·인간관계·삶의 방향)으로 들어와도 같은 카드입니다.
+#
+#  그래서 이 구역의 프롬프트에는 아래가 들어가지 않습니다.
+#      고민 분야 · 추가 질문 · Step1/2/3 응답 · 고민 해석 텍스트 ·
+#      Premium 관련 내용 · 1~3단계 대화 이력
+#  들어가는 것은 계산이 끝난 값뿐입니다.
+#      사주(년·월·일·시주 · 일간 · 오행) · 점성술(Sun · Moon · Ascendant) ·
+#      올해 연도와 그 해의 간지
 # ===============================================================
 YEAR_CARD_LOADING = "할매가 올해 네 카드를 고르고 있어요..."
 
@@ -806,40 +856,48 @@ YEAR_CARD_LOADING = "할매가 올해 네 카드를 고르고 있어요..."
 YEAR_CARD_TEMPERATURE = 0.3
 
 
-def build_year_card_prompt(year_luck_block: str) -> str:
-    """올해의 카드를 뽑아달라는 질문.
-
-    1~3단계 대화가 통째로 함께 전달되므로 사용자 정보는 다시 붙이지 않고,
-    파이썬이 계산한 '올해의 간지'만 새로 넘깁니다.
-    """
-    return f"""할매, 올해 제 카드는 뭔가요?
-
-{year_luck_block}
-
-[이번에 할 일 — 올해의 카드 한 장]
-지금까지 나눈 이야기(1~3단계)와 위 올해 기운을 합쳐서,
+def build_year_card_task() -> str:
+    """올해의 카드를 뽑아달라는 지시문. (사람마다 달라지지 않는 고정 글)"""
+    return """[이번에 할 일 — 올해의 카드 한 장]
+위 확정 명식·점성술 값과 올해 기운만 가지고,
 이 사람의 올해를 카드 한 장으로 압축해주거라.
+
+[이 카드가 무엇인지]
+이 카드는 "지금 무엇을 물었는가"에 대한 답이 아니다.
+이 사람이 올해 한 해 전반에 걸쳐 가져가야 할 '하나의 테마'다.
+연애로 물어도, 취업으로 물어도, 돈으로 물어도 같은 카드가 나와야 한다.
 
 [가장 중요한 규칙]
 카드는 짧아야 한다. 저장해두거나 남에게 보여주고 싶을 만큼 간결해야 한다.
-길게 쓰면 카드가 아니라 또 하나의 보고서가 된다.
-지금까지 한 이야기를 요약해 늘어놓지 말고, 딱 한 가지로 좁혀라.
+길게 쓰면 카드가 아니라 또 하나의 보고서가 된다. 딱 한 가지로 좁혀라.
 
 - title    : 영문 대문자 두세 단어 (THE ~). 이 사람의 올해를 한 장면으로.
 - keyword  : 한글 한 단어
 - message  : 할매 말투 한 문장, 40자 안팎
 - basis    : 왜 이 카드인지. 올해 간지와 이 사람 사주/점성술을 연결해 150자 안팎
-- actions  : 올해 가장 중요한 행동 1~2개 (3개 이상 금지)
+- actions  : 올해 가장 중요한 행동 원칙 1~2개 (3개 이상 금지)
 - caution  : 조심할 패턴 딱 1개
 
+[행동 원칙(actions) 쓰는 법 — 반드시 지킬 것]
+여러 삶의 영역에 그대로 옮겨 쓸 수 있는 수준의 원칙으로 쓴다.
+  좋은 예: 판단을 오래 미루고 있다면 가장 작은 행동 하나부터 실행하거라
+  좋은 예: 새로운 환경이나 사람에 노출되는 횟수를 지금보다 늘리거라
+  좋은 예: 반복해서 미뤄온 결정 하나를 이번 달에 매듭지어라
+  나쁜 예: 이력서를 고쳐 써라 / 현업 실무자에게 연락해라 (취업 전용)
+  나쁜 예: 소개팅에 나가라 / 먼저 연락해라 (연애 전용)
+  나쁜 예: 적립식으로 투자를 시작해라 (돈 전용)
+구체적이어야 하지만, 특정 고민 분야에만 맞는 행동이면 안 된다.
+
 [금지]
+- 이 사람의 고민 분야·질문을 짐작해서 답하는 것
+  (고민 정보는 주어지지 않았다. 없는 것을 있다고 여기고 쓰지 마라.)
+- 취업 · 연애 · 재테크 · 이직 · 결혼 같은 특정 영역 전용 조언
 - 올해 안의 특정 월이나 날짜를 짚어 예언하는 것
   (월별 운세 데이터는 주어지지 않았다. 위 간지 말고 다른 시점 정보를 지어내지 마라.)
 - "새로운 도전을 하라" 같은 누구에게나 되는 말
-- 1~3단계에서 쓴 문장을 그대로 다시 쓰는 것
 - 사용자의 이름을 카드 안에 적는 것
-  (1~3단계에서는 이름을 불러도 되지만, 카드는 저장해두고 남에게 보여주는 것이라
-   이름이 들어가면 안 된다. 부를 일이 있으면 "너"라고만 하거라.)"""
+  (카드는 저장해두고 남에게 보여주는 것이라 이름이 들어가면 안 된다.
+   부를 일이 있으면 "너"라고만 하거라.)"""
 
 
 def build_year_luck_block(year_ganji: dict, notes: list[str]) -> str:
@@ -856,13 +914,86 @@ def build_year_luck_block(year_ganji: dict, notes: list[str]) -> str:
     return "\n".join(lines)
 
 
+def build_year_card_prompt(
+    saju: dict | None,
+    astro: dict | None,
+    year_ganji: dict,
+    year_notes: list[str],
+) -> str:
+    """올해의 카드 프롬프트 — 이 한 덩이로 완결됩니다.
+
+    [왜 1~3단계 대화를 이어받지 않는가]
+        예전에는 1~3단계 대화(history)를 통째로 함께 보냈습니다.
+        그 대화 안에는 고민 분야 · 추가 질문 · Step1~3 답변이 들어 있어서,
+        커리어 고민으로 만든 카드에 "이력서" 같은 취업 전용 행동이 박혔습니다.
+        stable_key 는 고민과 무관하므로, 그 카드가 나중에 연애로 들어온
+        같은 사람에게 그대로 재사용되었습니다.
+
+        그래서 카드는 대화를 이어받지 않고, 계산 결과만으로 새로 묻습니다.
+        같은 사람·같은 해라면 프롬프트가 한 글자도 다르지 않습니다.
+
+    [들어가는 것]  확정 사주 명식 · 점성술 값 · 올해 간지와 연간 정보
+    [들어가지 않는 것]
+        고민 분야 · 추가 질문 · Step1/2/3 응답 · 고민 해석 텍스트 ·
+        Premium 관련 내용 · 이름
+    """
+    from astrology import format_astrology_for_prompt
+    from saju import format_saju_for_prompt
+
+    blocks = ["할매, 올해 제 카드는 뭔가요?"]
+
+    if saju:
+        blocks.append(format_saju_for_prompt(saju))
+    else:
+        blocks.append(
+            "[사주 명식]\n계산하지 못했다. 사주를 근거로 든 해석은 하지 말 것."
+        )
+
+    if astro:
+        blocks.append(format_astrology_for_prompt(astro))
+    else:
+        blocks.append(
+            "[점성술 데이터]\n계산하지 못했다. 점성술을 근거로 든 해석은 하지 말 것."
+        )
+
+    blocks.append(build_year_luck_block(year_ganji, year_notes))
+    blocks.append(build_year_card_task())
+
+    return "\n\n".join(blocks)
+
+
+def build_year_card_payload(
+    saju: dict | None,
+    astro: dict | None,
+    year_ganji: dict,
+    year_notes: list[str],
+) -> dict:
+    """Gemini 로 나가는 카드 요청을 그대로 담은 dict.
+
+    ask_year_card() 는 이 dict 를 그대로 보냅니다.
+    테스트는 Gemini 를 부르지 않고 이 dict 만 비교하면 됩니다 —
+    "커리어로 들어온 사람과 연애로 들어온 사람의 요청이 같은가"를
+    API 호출 없이 확인할 수 있습니다. (test_year_card_payload.py)
+    """
+    question = build_year_card_prompt(saju, astro, year_ganji, year_notes)
+    return {
+        "system_instruction": YEAR_CARD_SYSTEM_INSTRUCTION,
+        "contents": [{"role": "user", "parts": [{"text": question}]}],
+        "temperature": YEAR_CARD_TEMPERATURE,
+    }
+
+
 def ask_year_card(
-    history: list,
+    saju: dict | None,
+    astro: dict | None,
     year_ganji: dict,
     year_notes: list[str],
     api_key: str | None = None,
 ) -> YearCard:
-    """1~3단계 대화를 이어받아 올해의 카드 한 장을 받아옵니다.
+    """올해의 카드 한 장을 받아옵니다.
+
+    1~3단계 대화는 일부러 넘기지 않습니다. (build_year_card_prompt 의 설명 참고)
+    같은 사람·같은 해라면 어떤 고민으로 들어와도 똑같은 요청이 나갑니다.
 
     연도는 Gemini 가 지어내지 못하도록, 받아온 뒤 파이썬 계산값으로 덮어씁니다.
     """
@@ -876,26 +1007,18 @@ def ask_year_card(
         return card
 
     client = get_client(api_key)
-    question = build_year_card_prompt(
-        build_year_luck_block(year_ganji, year_notes)
-    )
-
-    contents = [
-        {"role": turn["role"], "parts": [{"text": turn["text"]}]}
-        for turn in history
-    ]
-    contents.append({"role": "user", "parts": [{"text": question}]})
+    payload = build_year_card_payload(saju, astro, year_ganji, year_notes)
 
     config = types.GenerateContentConfig(
-        system_instruction=SYSTEM_INSTRUCTION,
+        system_instruction=payload["system_instruction"],
         response_mime_type="application/json",
         response_schema=YearCard,
         max_output_tokens=MAX_OUTPUT_TOKENS,
-        temperature=YEAR_CARD_TEMPERATURE,
+        temperature=payload["temperature"],
     )
 
     try:
-        response = _generate_with_retry(client, contents, config)
+        response = _generate_with_retry(client, payload["contents"], config)
     except genai_errors.ClientError as exc:
         if exc.code == 429:
             raise HalmaeError(

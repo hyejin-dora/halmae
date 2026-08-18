@@ -99,7 +99,41 @@ python config.py        # 지금 설정과 열쇠가 제대로 읽히는지 확�
 python db.py            # Supabase 연결 확인
 python test_supabase.py # events · feedback · cards 저장 테스트 (끝나면 자동 정리)
 python analytics.py     # 터미널에서 Funnel 지표 보기
+
+python test_saju_pipeline.py      # 사주 계산 파이프라인 (Gemini 호출 없음)
+python test_year_card_payload.py  # 올해의 카드가 고민과 독립인지 (Gemini 호출 없음)
 ```
+
+---
+
+## 올해의 카드 정책
+
+올해의 카드는 **"같은 사람 + 같은 출생정보 + 같은 연도"에 딱 한 장**입니다.
+연애 · 취업/커리어 · 돈 · 인간관계 · 삶의 방향, 어떤 고민으로 접속해도 같은 카드입니다.
+
+그래서 카드를 만들 때 아래는 **넣지 않습니다.**
+
+고민 분야 · 추가 질문 · Step1/2/3 응답 · 고민 해석 텍스트 ·
+Premium 관련 내용 · 1~3단계 대화 이력 · 이름
+
+넣는 것은 계산이 끝난 값뿐입니다.
+
+사주(년주 · 월주 · 일주 · 시주 · 일간 · 오행) ·
+점성술(Sun · Moon · Ascendant) · 현재 연도와 그 해의 간지
+
+`stable_key` 도 같은 규칙입니다 — 연도와 정규화된 출생정보만 들어갑니다.
+행동 지침(actions)도 "이력서를 써라"처럼 특정 고민에 종속되지 않고,
+여러 삶의 영역에 적용할 수 있는 원칙으로 씁니다.
+
+```bash
+python card_store.py                      # 저장된 카드 목록
+python card_store.py --delete <열쇠앞자리>  # 그 카드 한 장만 지우기
+python card_store.py --sql                # Supabase 에서 지우는 SQL 보기
+```
+
+개발자 모드(`HALMAE_USE_DEV_MODE=1`)에서는 카드 아래
+**"이 카드만 다시 뽑기"** 버튼으로 지금 세션의 카드 한 장만 버릴 수 있습니다.
+`cards` 테이블을 통째로 비우는 길은 어디에도 두지 않았습니다.
 
 ---
 
