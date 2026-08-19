@@ -817,15 +817,24 @@ def _css_yearcard(t: dict) -> str:
 
     구조 (위에서 아래로)
         머리   2026 YEAR CARD
-        그림   일러스트가 들어갈 자리 (지금은 선화 placeholder)
+        그림   카드의 주인공. 카드 높이의 절반을 여기에 씁니다.
         발치   THE ____ · 키워드 · 한 줄 메시지
+
+    [그림 칸이 주인공입니다]
+        그림은 칸 가장자리까지 꽉 채웁니다(inset: 0). 그 위에 금색 이중
+        프레임과 귀퉁이 문양을 얹고, 아래쪽에 장면 설명 두 줄을 어두운
+        띠로 겹칩니다. 설명이 그림의 자리를 빼앗지 않게 하려는 배치입니다.
+        실제 png 가 들어와도 프레임과 문양은 그대로 씌워집니다.
 
     [폭] 카드는 min(100%, 300px) 입니다. 고정 폭을 쓰지 않으므로
          320px 짜리 좁은 화면에서도 가로 스크롤이 생기지 않습니다.
     [높이] 그림 칸에 max-height 를 걸어, 화면이 짧은 기기에서
          카드 한 장이 화면을 다 잡아먹지 않게 했습니다.
-    [장식] 금선은 두 겹(바깥 굵은 선 + 안쪽 얇은 선)까지만.
-         네 귀퉁이 마름모 외에는 무늬를 넣지 않습니다 — 글자가 먼저입니다.
+
+    [SVG 의 색은 전부 여기 있습니다 — card_visuals.py 에는 없습니다]
+        card_visuals.py 는 class 만 붙여 보냅니다. 색·붓 두께·질감 필터를
+        가리키는 url(#…) 까지 모두 이 파일이 정합니다. 그래야 색을 바꿀 때
+        그림 파일 여덟 개를 열어볼 필요가 없습니다.
     """
     return f"""
     /* 카드를 가운데 세우는 자리 */
@@ -848,7 +857,7 @@ def _css_yearcard(t: dict) -> str:
                 {t['royal_red_deep']} 0%, {t['bg_panel']} 48%, {t['bg_deep']} 100%);
         border: 1px solid {t['gold']};
         border-radius: {t['radius_card']};
-        padding: 0.95rem 0.85rem 1.15rem 0.85rem;
+        padding: 0.75rem 0.7rem 1.1rem 0.7rem;
         text-align: center;
         box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
     }}
@@ -856,17 +865,16 @@ def _css_yearcard(t: dict) -> str:
     .halmae-yearcard::before {{
         content: "";
         position: absolute;
-        inset: 6px;
+        inset: 5px;
         border: 1px solid rgba(243, 216, 143, 0.30);
         border-radius: 2px;
         pointer-events: none;
     }}
-    /* 머리 장식 — 왕실 문서의 인장 자리처럼 가운데 마름모 하나.
-       전통 문양은 여기까지만 둡니다. 더 넣으면 글자가 묻힙니다. */
+    /* 머리 장식 — 왕실 문서의 인장 자리처럼 가운데 마름모 하나. */
     .halmae-yearcard::after {{
         content: "◆";
         position: absolute;
-        top: 10px;
+        top: 8px;
         left: 0;
         right: 0;
         font-size: 0.4rem;
@@ -879,79 +887,324 @@ def _css_yearcard(t: dict) -> str:
     .halmae-yearcard-year {{
         position: relative;
         font-family: {t['font_latin']};
-        font-size: 0.68rem;
+        font-size: 0.66rem;
         letter-spacing: 0.34em;
         text-indent: 0.34em;
         color: {t['gold_bright']};
-        margin: 0.8rem 0 0.7rem 0;
+        margin: 0.55rem 0 0.6rem 0;
     }}
 
-    /* [중앙] 그림 자리 — 세로 3:4.
-       image_url 이 있으면 <img>, 없으면 선화 placeholder 가 들어옵니다. */
+    /* ===========================================================
+       [중앙] 그림 칸 — 카드의 주인공. 세로 3:4.
+       image_url · assets/year_cards/*.png · fallback 아트가
+       모두 이 칸 안에 들어옵니다.
+       =========================================================== */
     .halmae-yearcard-art {{
         position: relative;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
+        /* 폭을 먼저 못 박습니다. 그래야 화면이 짧아도 그림이 카드 폭을
+           꽉 채우고, 높이만 줄어듭니다. (양옆이 비면 주인공처럼 안 보입니다)
+           높이는 화면 비례가 아니라 aspect-ratio 로 정하고,
+           max-height 는 이상한 화면을 위한 마지막 안전장치입니다. */
+        width: 100%;
         aspect-ratio: 3 / 4;
-        max-height: 40vh;
-        margin: 0 auto 0.85rem auto;
-        padding: 0.5rem;
+        max-height: 62vh;
+        margin: 0 auto 0.9rem auto;
         box-sizing: border-box;
         background:
-            radial-gradient(70% 55% at 50% 42%,
+            radial-gradient(70% 55% at 50% 38%,
                 rgba(210, 166, 46, 0.10) 0%, transparent 70%),
             {t['bg_deep']};
-        border: 1px solid {t['line_gold']};
+        border: 1px solid {t['gold']};
         border-radius: 2px;
         overflow: hidden;
+        box-shadow:
+            inset 0 0 26px rgba(0, 0, 0, 0.75),
+            0 4px 14px rgba(0, 0, 0, 0.5);
+    }}
+
+    /* fallback 아트 · 실제 그림 — 둘 다 칸을 가득 채웁니다 */
+    .halmae-yearcard-svg,
+    .halmae-yearcard-image {{
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
     }}
     .halmae-yearcard-svg {{
-        /* 장면 설명 한 줄과 자리를 나눠 씁니다.
-           min-height: 0 이 없으면 flex 안에서 줄어들지 못해 칸을 뚫습니다. */
-        flex: 1 1 auto;
-        min-height: 0;
-        width: 100%;
         fill: none;
         stroke-linecap: round;
         stroke-linejoin: round;
     }}
-    /* 선화에 쓰는 네 가지 붓 — card_visuals.py 가 class 만 붙여 보냅니다 */
-    .halmae-yearcard-svg .hm-line {{
-        stroke: {t['gold_bright']};
-        stroke-width: 2.1;
-    }}
-    .halmae-yearcard-svg .hm-soft {{
-        stroke: {t['gold_dim']};
-        stroke-width: 1.2;
-        opacity: 0.85;
-    }}
-    .halmae-yearcard-svg .hm-red {{
-        stroke: {t['royal_red_soft']};
-        stroke-width: 2.1;
-    }}
-    .halmae-yearcard-svg .hm-jade {{
-        stroke: {t['jade_soft']};
-        stroke-width: 2.1;
-    }}
-    /* 진짜 일러스트가 들어왔을 때 (image_url).
+    /* 진짜 일러스트가 들어왔을 때.
        object-fit: cover — 그림 비율이 칸과 달라도 찌그러지지 않습니다.
        대신 가장자리가 조금 잘리므로, 그림은 가운데에 여백을 두고 그리게 합니다. */
     .halmae-yearcard-image {{
-        width: 100%;
-        height: 100%;
         object-fit: cover;
-        display: block;
     }}
-    /* 그림 밑 한 줄 — 무슨 장면인지 */
+
+    /* -----------------------------------------------------------
+       금색 이중 프레임 + 귀퉁이 문양
+       그림 위에 얹는 껍데기라 fallback 이든 실제 png 든 똑같이 씌워집니다.
+       귀퉁이 갈고리는 background-image 로 그린 여덟 개의 짧은 금선입니다.
+       ----------------------------------------------------------- */
+    .halmae-yearcard-frame {{
+        position: absolute;
+        inset: 5px;
+        border: 1px solid rgba(243, 216, 143, 0.26);
+        pointer-events: none;
+        background-image:
+            linear-gradient(90deg, {t['gold_bright']}, {t['gold_bright']}),
+            linear-gradient(180deg, {t['gold_bright']}, {t['gold_bright']}),
+            linear-gradient(90deg, {t['gold_bright']}, {t['gold_bright']}),
+            linear-gradient(180deg, {t['gold_bright']}, {t['gold_bright']}),
+            linear-gradient(90deg, {t['gold_bright']}, {t['gold_bright']}),
+            linear-gradient(180deg, {t['gold_bright']}, {t['gold_bright']}),
+            linear-gradient(90deg, {t['gold_bright']}, {t['gold_bright']}),
+            linear-gradient(180deg, {t['gold_bright']}, {t['gold_bright']});
+        background-repeat: no-repeat;
+        background-size:
+            15px 1px, 1px 15px,
+            15px 1px, 1px 15px,
+            15px 1px, 1px 15px,
+            15px 1px, 1px 15px;
+        background-position:
+            left 4px top 4px, left 4px top 4px,
+            right 4px top 4px, right 4px top 4px,
+            left 4px bottom 4px, left 4px bottom 4px,
+            right 4px bottom 4px, right 4px bottom 4px;
+    }}
+    /* 위·아래 가운데 문양 하나씩 — 자개장 경첩 자리처럼 */
+    .halmae-yearcard-frame::before,
+    .halmae-yearcard-frame::after {{
+        content: "◆";
+        position: absolute;
+        left: 0;
+        right: 0;
+        font-size: 0.36rem;
+        line-height: 1;
+        color: {t['gold_bright']};
+        opacity: 0.55;
+    }}
+    .halmae-yearcard-frame::before {{ top: -3px; }}
+    .halmae-yearcard-frame::after {{ bottom: -3px; }}
+
+    /* -----------------------------------------------------------
+       fallback 아트 아래 두 줄 — 무슨 그림이고 어떤 결인지.
+       그림 위에 어두운 띠로 겹쳐 놓아, 그림의 높이를 빼앗지 않습니다.
+       (실제 png 가 들어오면 이 띠는 아예 나오지 않습니다)
+       ----------------------------------------------------------- */
+    .halmae-yearcard-plate {{
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        padding: 1rem 0.7rem 0.45rem 0.7rem;
+        background: linear-gradient(180deg,
+            transparent 0%, rgba(12, 6, 9, 0.62) 34%, rgba(12, 6, 9, 0.96) 100%);
+        pointer-events: none;
+    }}
     .halmae-yearcard-scene {{
+        display: block;
+        font-family: {t['font_title']};
+        font-size: 0.68rem;
+        letter-spacing: 0.04em;
+        line-height: 1.5;
+        word-break: keep-all;
+        color: {t['gold_bright']};
+        /* 그림의 밝은 획 위에 놓여도 읽히게 — 띠만으로는 모자랍니다 */
+        text-shadow: 0 1px 3px rgba(12, 6, 9, 0.95);
+        margin: 0;
+    }}
+    .halmae-yearcard-mood {{
+        display: block;
         font-family: {t['font_body']};
-        font-size: 0.62rem;
-        letter-spacing: 0.08em;
+        font-size: 0.56rem;
+        letter-spacing: 0.06em;
+        line-height: 1.6;
         word-break: keep-all;
         color: {t['ivory_low']};
-        margin: 0.35rem 0 0 0;
+        text-shadow: 0 1px 3px rgba(12, 6, 9, 0.95);
+        margin: 0.15rem 0 0 0;
+    }}
+
+    /* ===========================================================
+       fallback 아트의 물감 — card_visuals.py 는 class 만 붙여 보냅니다
+       =========================================================== */
+
+    /* 바닥 · 후광 · 한지 결.
+       url(…) 뒤의 색은 gradient 를 못 찾았을 때 쓰는 예비 색입니다.
+       (그림이 통째로 사라지는 것보다 단색이라도 깔리는 편이 낫습니다) */
+    .halmae-yearcard-svg .hm-ground {{
+        fill: url(#hm-night) {t['bg_deep']};
+    }}
+    .halmae-yearcard-svg .hm-halo {{
+        fill: url(#hm-halo) transparent;
+    }}
+    .halmae-yearcard-svg .hm-hanji {{
+        fill: {t['bg_panel']};
+        filter: url(#hm-fiber);
+        opacity: 0.24;
+        mix-blend-mode: overlay;
+    }}
+    .halmae-yearcard-svg .hm-ember {{
+        fill: url(#hm-ember-paint) {t['royal_red_deep']};
+    }}
+    .halmae-yearcard-svg .hm-dew {{
+        fill: url(#hm-dew-paint) transparent;
+    }}
+
+    /* 바닥 그러데이션의 색 — 먹빛 위에 자적이 은근히 도는 밤 */
+    .halmae-yearcard-svg .hm-night-0 {{ stop-color: {t['royal_red_deep']}; }}
+    .halmae-yearcard-svg .hm-night-1 {{ stop-color: {t['bg_panel']}; }}
+    .halmae-yearcard-svg .hm-night-2 {{ stop-color: {t['bg_deep']}; }}
+
+    /* 후광 — 주인공 뒤에서 올라오는 금빛 */
+    .halmae-yearcard-svg .hm-halo-0 {{
+        stop-color: {t['gold_bright']};
+        stop-opacity: 0.17;
+    }}
+    .halmae-yearcard-svg .hm-halo-1 {{
+        stop-color: {t['gold']};
+        stop-opacity: 0.07;
+    }}
+    .halmae-yearcard-svg .hm-halo-2 {{
+        stop-color: {t['gold']};
+        stop-opacity: 0;
+    }}
+
+    /* 아래에서 올라오는 붉은 기운 */
+    .halmae-yearcard-svg .hm-ember-0 {{
+        stop-color: {t['royal_red']};
+        stop-opacity: 0.62;
+    }}
+    .halmae-yearcard-svg .hm-ember-1 {{
+        stop-color: {t['royal_red_soft']};
+        stop-opacity: 0.03;
+    }}
+
+    /* 새벽빛 — 아래쪽은 금, 위로 가며 비취로 식다가 사라집니다.
+       (판 전체를 덮으므로 위아래가 흐려져야 이음선이 보이지 않습니다) */
+    .halmae-yearcard-svg .hm-dew-0 {{
+        stop-color: {t['gold']};
+        stop-opacity: 0.26;
+    }}
+    .halmae-yearcard-svg .hm-dew-1 {{
+        stop-color: {t['jade']};
+        stop-opacity: 0;
+    }}
+
+    /* 테마마다 후광 색을 달리해, 여덟 장이 서로 다른 기운으로 보이게 합니다 */
+    .halmae-yearcard-svg--breakthrough .hm-halo-0,
+    .halmae-yearcard-svg--transformation .hm-halo-0,
+    .halmae-yearcard-svg--connection .hm-halo-0 {{
+        stop-color: {t['royal_red']};
+        stop-opacity: 0.30;
+    }}
+    .halmae-yearcard-svg--clarity .hm-halo-0 {{
+        stop-color: {t['ivory']};
+        stop-opacity: 0.16;
+    }}
+    .halmae-yearcard-svg--renewal .hm-halo-0 {{
+        stop-color: {t['jade_soft']};
+        stop-opacity: 0.18;
+    }}
+
+    /* 겹 — 연필 밑그림과 색연필 채색만 손떨림을 줍니다.
+       강조(hm-accent)는 필터를 걸지 않습니다. 여기만 선명해야 눈이 멈춥니다. */
+    .halmae-yearcard-svg .hm-sketch {{ filter: url(#hm-grain); }}
+    .halmae-yearcard-svg .hm-shade {{ filter: url(#hm-graze); }}
+
+    /* 붓 — 선 */
+    .halmae-yearcard-svg .hm-line {{
+        stroke: {t['gold_bright']};
+        stroke-width: 3.6;
+    }}
+    .halmae-yearcard-svg .hm-line-thin {{
+        stroke: {t['gold']};
+        stroke-width: 2.2;
+    }}
+    .halmae-yearcard-svg .hm-soft {{
+        stroke: {t['gold_dim']};
+        stroke-width: 1.5;
+        opacity: 0.85;
+    }}
+    .halmae-yearcard-svg .hm-red {{
+        stroke: {t['royal_red']};
+        stroke-width: 3.4;
+    }}
+    /* 붉은 선 뒤에 깔리는 번짐 — 대홍은 어두워서 이것 없이는 묻힙니다 */
+    .halmae-yearcard-svg .hm-red-glow {{
+        stroke: {t['royal_red']};
+        stroke-width: 8;
+        opacity: 0.42;
+        filter: url(#hm-bloom);
+    }}
+    /* 비취는 얇고 차분하게. 굵고 밝으면 만화 같아집니다. */
+    .halmae-yearcard-svg .hm-jade {{
+        stroke: {t['jade_soft']};
+        stroke-width: 2.6;
+        opacity: 0.78;
+    }}
+    /* 형태 뒤에 깔리는 금빛 번짐 — 선이 종이에 배어든 느낌 */
+    .halmae-yearcard-svg .hm-glow {{
+        stroke: {t['gold_bright']};
+        stroke-width: 7;
+        opacity: 0.20;
+        filter: url(#hm-bloom);
+    }}
+
+    /* 붓 — 색연필 해칭(채색). 짧은 사선을 겹쳐 면을 만듭니다 */
+    .halmae-yearcard-svg .hm-hatch {{
+        stroke: {t['gold_dim']};
+        stroke-width: 1.2;
+        opacity: 0.55;
+    }}
+    .halmae-yearcard-svg .hm-hatch-red {{
+        stroke: {t['royal_red_line']};
+        stroke-width: 1.3;
+        opacity: 0.62;
+    }}
+    .halmae-yearcard-svg .hm-hatch-jade {{
+        stroke: {t['jade_line']};
+        stroke-width: 1.3;
+        opacity: 0.62;
+    }}
+
+    /* 붓 — 면 채우기 */
+    .halmae-yearcard-svg .hm-fill-gold {{
+        fill: {t['gold']};
+        opacity: 0.13;
+    }}
+    .halmae-yearcard-svg .hm-fill-red {{
+        fill: {t['royal_red']};
+        opacity: 0.20;
+    }}
+    .halmae-yearcard-svg .hm-fill-jade {{
+        fill: {t['jade']};
+        opacity: 0.22;
+    }}
+    .halmae-yearcard-svg .hm-fill-dark {{
+        fill: {t['bg_deep']};
+        opacity: 0.55;
+    }}
+
+    /* 자개장 귀퉁이 당초문 — 그림 뒤에 깔리는 장식.
+       비어 보이던 네 귀퉁이를 메웁니다. (실제 png 가 들어오면 가려집니다) */
+    .halmae-yearcard-svg .hm-ornament {{
+        stroke: {t['gold_dim']};
+        stroke-width: 1.5;
+        opacity: 0.55;
+    }}
+
+    /* 자개 티끌 — 어두운 바닥에 박힌 작은 빛 */
+    .halmae-yearcard-svg .hm-pearl {{
+        fill: {t['gold_bright']};
+        opacity: 0.7;
+    }}
+    .halmae-yearcard-svg .hm-pearl-jade {{
+        fill: {t['jade_soft']};
+        opacity: 0.6;
     }}
 
     /* [하단] THE ____ · 키워드 · 한 줄 메시지 */
@@ -961,12 +1214,12 @@ def _css_yearcard(t: dict) -> str:
         /* 제목이 낱말 중간에서 끊기지 않도록 (좁은 화면에서 특히) */
         word-break: keep-all;
         overflow-wrap: anywhere;
-        font-size: 1.55rem;
+        font-size: 1.5rem;
         font-weight: 600;
         letter-spacing: 0.08em;
         line-height: 1.2;
         color: {t['gold_bright']};
-        margin: 0 0 0.55rem 0;
+        margin: 0 0 0.5rem 0;
         text-shadow: 0 0 18px rgba(243, 216, 143, 0.32);
     }}
     .halmae-yearcard-keyword {{
@@ -980,7 +1233,7 @@ def _css_yearcard(t: dict) -> str:
         border: 1px solid {t['gold_bright']};
         border-radius: {t['radius_pill']};
         padding: 0.2rem 0.8rem;
-        margin: 0 0 0.7rem 0;
+        margin: 0 0 0.65rem 0;
     }}
     .halmae-yearcard-message {{
         font-family: {t['font_title']};
@@ -1290,14 +1543,14 @@ def _css_mobile(t: dict) -> str:
         .halmae-myeongsik-value {{ font-size: 0.92rem; }}
 
         /* 올해의 카드 — 좁은 화면에서도 세로형 비율을 지킵니다.
-           폭은 max-width 라 화면을 넘지 않고, 그림 칸 높이만 줄입니다. */
-        .halmae-yearcard {{ padding: 0.8rem 0.7rem 1rem 0.7rem; }}
+           폭은 max-width 라 화면을 넘지 않고, 그림 칸 높이만 줄입니다.
+           그림이 카드의 주인공이라, 줄이는 순서는 여백 → 글자 → 그림입니다. */
+        .halmae-yearcard {{ padding: 0.7rem 0.6rem 0.95rem 0.6rem; }}
         .halmae-yearcard-title {{
             font-size: 1.6rem;
             letter-spacing: 0.04em;
         }}
         .halmae-yearcard-message {{ font-size: 0.92rem; line-height: 1.7; }}
-        .halmae-yearcard-art {{ max-height: 34vh; }}
 
         /* Premium */
         .halmae-premium {{ padding: 1.5rem 0.9rem; }}
@@ -1316,9 +1569,22 @@ def _css_mobile(t: dict) -> str:
         .block-container {{ padding-left: 0.8rem; padding-right: 0.8rem; }}
         .halmae-title-sm {{ font-size: 2.1rem; }}
         .halmae-yearcard-title {{ font-size: 1.42rem; }}
-        .halmae-yearcard-art {{ max-height: 30vh; }}
-        .halmae-yearcard-scene {{ font-size: 0.58rem; }}
+        .halmae-yearcard-scene {{ font-size: 0.62rem; }}
+        .halmae-yearcard-mood {{ font-size: 0.52rem; }}
+        .halmae-yearcard-plate {{ padding: 0.9rem 0.5rem 0.35rem 0.5rem; }}
         .halmae-myeongsik-value {{ font-size: 0.86rem; }}
+    }}
+
+    /* 세로가 짧은 기기 (구형 아이폰 가로 · 작은 안드로이드)
+       올해의 카드 한 장이 화면을 다 잡아먹지 않게, 그림 칸의 '높이만'
+       낮춥니다. 폭은 그대로 카드를 꽉 채웁니다.
+       (실제 png 는 object-fit: cover 라 가운데를 살리고 위아래만 잘립니다) */
+    @media (max-height: 720px) {{
+        .halmae-yearcard-art {{ aspect-ratio: 5 / 6; }}
+    }}
+    @media (max-height: 620px) {{
+        .halmae-yearcard-art {{ aspect-ratio: 4 / 5; }}
+        .halmae-yearcard-plate {{ padding: 0.8rem 0.5rem 0.3rem 0.5rem; }}
     }}
     """
 

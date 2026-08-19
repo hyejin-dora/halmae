@@ -5,10 +5,12 @@
 이 파일이 확인하는 것
     1. visual_theme 이 여덟 개 enum 으로 잠겨 있는지 (Gemini 스키마까지)
     2. 옛날 카드(visual_theme 없음)를 지우지 않고 그대로 읽는지
-    3. image_url 이 없으면 placeholder, 있으면 그림이 나오는지
+    3. image_url 이 없으면 fallback 아트, 있으면 그림이 나오는지
     4. 타로 카드가 좁은 화면 폭을 넘지 않는지 (고정 폭 · 세로 비율)
     5. 같은 열쇠의 카드를 다시 꺼내면 그림 주제까지 그대로 재사용되는지
-    6. 여덟 테마 그림이 전부 있고, SVG 가 깨지지 않았는지
+    6. 여덟 테마 fallback 아트가 전부 있고, 허전하지 않고, 깨지지 않았는지
+    7. 화면(app.py)이 이 구조를 실제로 쓰는지
+    8. assets/year_cards/<theme>.png 를 넣으면 그 그림으로 바뀌는지
 
 절대 하지 않는 일
     - Gemini API 호출 (스키마와 프롬프트 조립 함수만 봅니다)
@@ -17,6 +19,7 @@
   개인정보를 만들지도, 출력하지도 않습니다. 예시 카드(mock)만 씁니다.
 """
 
+import base64
 import json
 import sys
 import xml.etree.ElementTree as ElementTree
@@ -27,14 +30,20 @@ import card_visuals
 import halmae_ai
 import theme
 from card_visuals import (
+    ART_DIRECTION,
+    ASSET_ROOT,
     FALLBACK_VISUAL_THEME,
+    THEME_IMAGE_MAP,
     VISUAL_THEMES,
     VisualTheme,
     art_html,
+    has_theme_asset,
     image_prompt,
+    mood_of,
     normalize_theme,
     placeholder_svg,
     scene_of,
+    theme_asset_file,
 )
 from halmae_ai import YearCard, YearCardDraft
 
@@ -171,17 +180,25 @@ def verify_image_url() -> None:
     section("3. image_url 이 있으면 그림, 없으면 placeholder")
 
     html = art_html(EXAMPLE_CARD)
-    check("그림 주소가 없으면 선화 placeholder 를 그린다",
+    check("그림 주소가 없으면 fallback 아트를 그린다",
           "<svg" in html and "<img" not in html)
     check("무슨 그림이 들어갈 자리인지 한 줄로 알려준다",
           scene_of("expansion") in html, scene_of("expansion"))
+    check("그림의 결까지 한 줄 더 알려준다 (허전하지 않게)",
+          mood_of("expansion") in html, mood_of("expansion"))
+    check("fallback 아트에도 금색 프레임이 씌워진다",
+          'class="halmae-yearcard-frame"' in html)
 
     with_image = {**EXAMPLE_CARD, "image_url": "https://cdn.example.com/a.png"}
     html2 = art_html(with_image)
     check("그림 주소가 있으면 그 그림을 보여준다",
           '<img class="halmae-yearcard-image"' in html2
           and "https://cdn.example.com/a.png" in html2)
-    check("그림이 있으면 placeholder 는 그리지 않는다", "<svg" not in html2)
+    check("그림이 있으면 fallback 아트는 그리지 않는다", "<svg" not in html2)
+    check("실제 그림에도 같은 금색 프레임이 씌워진다",
+          'class="halmae-yearcard-frame"' in html2)
+    check("실제 그림에는 설명 띠를 겹치지 않는다 (그림이 주인공)",
+          'class="halmae-yearcard-plate"' not in html2)
 
     # 카드 글은 Gemini 가 씁니다. 주소 칸에 이상한 값이 들어와도
     # 그대로 화면에 심기면 안 됩니다.
@@ -190,7 +207,7 @@ def verify_image_url() -> None:
         safe = card_visuals.safe_image_url({"image_url": bad})
         drawn = art_html({**EXAMPLE_CARD, "image_url": bad})
         check(f"수상한 주소({bad[:22]}…)는 아예 받지 않는다", safe is None)
-        check(f"수상한 주소({bad[:22]}…)는 placeholder 로 내려간다",
+        check(f"수상한 주소({bad[:22]}…)는 fallback 아트로 내려간다",
               "<svg" in drawn and "<img" not in drawn)
 
     # 모델 객체로 넘겨도 dict 로 넘겨도 같아야 합니다. (app.py 는 모델을 넘깁니다)
@@ -216,9 +233,25 @@ def verify_mobile() -> None:
           not any("width: " in line and "px" in line and "max-width" not in line
                   for line in block.splitlines()))
     check("그림 칸이 세로형이다 (3:4)", "aspect-ratio: 3 / 4" in css)
-    check("화면이 짧으면 그림 칸이 줄어든다 (답변 흐름을 막지 않게)",
-          "max-height: 40vh" in css and "max-height: 34vh" in css
-          and "max-height: 30vh" in css)
+    check("그림 칸이 언제나 카드 폭을 꽉 채운다 (양옆이 비지 않게)",
+          "width: 100%;" in css[css.index(".halmae-yearcard-art {"):][:900])
+    check("화면이 짧으면 그림의 폭이 아니라 높이만 줄어든다",
+          "@media (max-height: 720px)" in css
+          and "aspect-ratio: 5 / 6" in css
+          and "@media (max-height: 620px)" in css
+          and "aspect-ratio: 4 / 5" in css)
+    check("높이를 낮춰도 세로형은 지킨다 (정사각까지 내려가지 않는다)",
+          "aspect-ratio: 1 / 1" not in css)
+    check("설명 두 줄이 밝은 획 위에서도 읽힌다 (띠 + 글자 그림자)",
+          css.count("text-shadow: 0 1px 3px rgba(12, 6, 9, 0.95)") >= 2)
+    check("이상한 화면을 위한 마지막 높이 안전장치가 있다",
+          "max-height: 62vh" in css)
+    # 그림이 카드의 주인공이 되었는지 — 칸을 가장자리까지 채우는가.
+    art_block = css[css.index(".halmae-yearcard-svg,"):]
+    check("그림이 칸을 가장자리까지 채운다 (inset: 0)",
+          "inset: 0;" in art_block[:400])
+    check("설명 두 줄이 그림 위에 겹친다 (그림 높이를 빼앗지 않게)",
+          "position: absolute" in css[css.index(".halmae-yearcard-plate {"):][:200])
     check("좁은 화면에서 제목이 작아진다",
           "font-size: 1.6rem" in css and "font-size: 1.42rem" in css)
     check("제목·메시지가 낱말 중간에서 끊기지 않는다",
@@ -242,9 +275,11 @@ def verify_mobile() -> None:
     check("300px 를 넘는 고정 폭이 없다", not too_wide, str(sorted(set(too_wide))))
 
     # 그림이 칸을 뚫고 나가지 않아야 합니다.
+    # (글자 수로 자르면 주석 한 줄에도 깨지므로 규칙 한 덩이만 잘라서 봅니다)
+    art_rule_start = css.index(".halmae-yearcard-art {")
+    art_rule = css[art_rule_start:css.index("}", art_rule_start)]
     check("그림은 칸 안에서만 그려진다 (overflow: hidden)",
-          "overflow: hidden" in css[css.index(".halmae-yearcard-art"):]
-          [:600])
+          "overflow: hidden" in art_rule)
 
 
 # ===============================================================
@@ -306,36 +341,100 @@ def verify_reuse() -> None:
 
 
 # ===============================================================
-#  6. 그림 여덟 장 — 전부 있고 깨지지 않았는가
+#  6. fallback 아트 여덟 장 — 있고, 허전하지 않고, 깨지지 않았는가
+#
+#  단순 아이콘 하나였던 시절의 기준(획 5개)으로는 "허전하지 않은가" 를
+#  볼 수 없습니다. 그래서 겹(layer)이 다 쌓였는지와, defs 를 뺀
+#  실제 그려지는 획이 몇 개인지를 함께 봅니다.
 # ===============================================================
+
+# 아트 한 장을 이루는 여섯 겹. 하나라도 빠지면 그림이 납작해집니다.
+_REQUIRED_LAYERS = ("hm-back", "hm-sketch", "hm-shade", "hm-accent")
+_REQUIRED_PLATE = ("hm-ground", "hm-halo", "hm-hanji")
+
+
+def _drawn_shapes(root) -> list:
+    """defs(물감 정의) 를 뺀, 실제로 화면에 그려지는 도형만."""
+    shapes = []
+    for child in root:
+        if child.tag.endswith("defs"):
+            continue
+        shapes.extend([node for node in child.iter() if node is not child])
+        shapes.append(child)
+    return shapes
+
+
 def verify_art() -> None:
-    section("6. 여덟 테마 그림이 전부 그려진다")
+    section("6. 여덟 테마 fallback 아트가 전부, 풍부하게 그려진다")
 
     for item in VisualTheme:
         svg = placeholder_svg(item)
         try:
             root = ElementTree.fromstring(svg)
-            strokes = len(list(root))
             broken = ""
         except ElementTree.ParseError as exc:
-            root, strokes, broken = None, 0, str(exc)
+            root, broken = None, str(exc)
         check(f"{item.value:<15} SVG 가 깨지지 않았다", root is not None, broken)
-        check(f"{item.value:<15} 그림에 선이 충분하다 ({strokes}획)", strokes >= 5)
+        if root is None:
+            continue
+
+        shapes = _drawn_shapes(root)
+        check(f"{item.value:<15} 그림이 허전하지 않다 ({len(shapes)}획)",
+              len(shapes) >= 30)
+
+        classes = {node.get("class", "") for node in root.iter()}
+        missing = [name for name in _REQUIRED_LAYERS if name not in classes]
+        check(f"{item.value:<15} 여섯 겹이 다 쌓였다",
+              not missing, "빠진 겹: " + ", ".join(missing) if missing else "")
+        missing_plate = [name for name in _REQUIRED_PLATE if name not in classes]
+        check(f"{item.value:<15} 바닥·후광·한지결이 깔렸다", not missing_plate,
+              ", ".join(missing_plate))
+        check(f"{item.value:<15} 색연필 채색(해칭)이 들어갔다",
+              any(name.startswith("hm-hatch") for name in classes))
+        check(f"{item.value:<15} 자개 티끌이 박혀 있다",
+              any(name.startswith("hm-pearl") for name in classes))
+        check(f"{item.value:<15} 연필 질감 필터를 가지고 있다",
+              "hm-grain" in svg and "feDisplacementMap" in svg)
+        check(f"{item.value:<15} 테마별 class 가 붙어 있다 (후광 색 구분)",
+              f"halmae-yearcard-svg--{item.value}" in svg)
         check(f"{item.value:<15} 장면 설명이 있다", bool(scene_of(item).strip()),
               scene_of(item))
-        check(f"{item.value:<15} 다음 단계용 이미지 프롬프트가 있다",
-              len(image_prompt(item)) > 40)
+        check(f"{item.value:<15} 그림의 결이 세 낱말로 적혀 있다",
+              mood_of(item).count("·") >= 2, mood_of(item))
+        check(f"{item.value:<15} 이미지 생성용 프롬프트가 있다",
+              len(image_prompt(item)) > 200 and ART_DIRECTION in image_prompt(item))
 
     # 색은 theme.py 가 정합니다. SVG 안에 색을 직접 쓰면 테마가 어긋납니다.
+    # (gradient·filter 를 가리키는 url(#…) 도 CSS 에 있으므로 # 이 없어야 합니다)
     all_svg = "".join(placeholder_svg(item) for item in VisualTheme)
     check("SVG 안에 색을 직접 박아두지 않았다 (theme.py 가 색을 정한다)",
           "#" not in all_svg and "rgb(" not in all_svg)
-    check("SVG 가 쓰는 붓이 CSS 에 전부 정의돼 있다",
-          all(f".hm-{brush}" in theme.build_css()
-              for brush in ("line", "soft", "red", "jade")))
+
+    css = theme.build_css()
+    brushes = ("line", "line-thin", "soft", "red", "red-glow", "jade", "hatch",
+               "hatch-red", "hatch-jade", "glow", "ground", "halo", "hanji",
+               "ember", "dew", "fill-gold", "fill-red", "fill-jade", "fill-dark",
+               "ornament", "pearl", "pearl-jade", "sketch", "shade")
+    undefined = [name for name in brushes if f".hm-{name} " not in css
+                 and f".hm-{name}," not in css and f".hm-{name} {{" not in css]
+    check("SVG 가 쓰는 붓이 CSS 에 전부 정의돼 있다", not undefined,
+          ", ".join(undefined))
+
+    # SVG 안의 defs 이름과 CSS 의 url(#…) 이 어긋나면 그림이 통째로 사라집니다.
+    for paint in ("hm-night", "hm-halo", "hm-ember-paint", "hm-dew-paint",
+                  "hm-fiber", "hm-grain", "hm-graze", "hm-bloom"):
+        check(f"물감 {paint} 이(가) SVG 와 CSS 양쪽에 있다",
+              f'id="{paint}"' in all_svg and f"url(#{paint})" in css)
+
+    # gradient 를 못 찾아도 단색이라도 깔리게 예비 색을 적어두었는가.
+    check("gradient 를 못 찾아도 바닥이 비지 않는다 (예비 색)",
+          "fill: url(#hm-night)" in css
+          and css.split("fill: url(#hm-night)")[1].lstrip()[0] != ";")
 
     scenes = {scene_of(item) for item in VisualTheme}
+    moods = {mood_of(item) for item in VisualTheme}
     check("여덟 장면이 서로 다르다", len(scenes) == 8)
+    check("여덟 결이 서로 다르다", len(moods) == 8)
 
 
 # ===============================================================
@@ -367,6 +466,82 @@ def verify_app_wiring() -> None:
         check(f"카드 프롬프트 조립에 {forbidden} 이(가) 들어오지 않는다",
               f'"{forbidden}"' not in card_section
               and f"answers[{forbidden}]" not in card_section)
+
+
+# ===============================================================
+#  8. 실제 그림 파일을 넣으면 그 그림으로 바뀌는가
+#
+#  나중에 사람이 png 를 넣기만 하면 되는 구조인지 봅니다.
+#  (여기서만 임시 파일을 만들고, 끝나면 지웁니다)
+# ===============================================================
+def verify_assets() -> None:
+    section("8. assets/year_cards 에 png 를 넣으면 그 그림이 나온다")
+
+    check("여덟 테마의 파일 자리가 전부 정해져 있다",
+          set(THEME_IMAGE_MAP) == set(VISUAL_THEMES))
+    check(f"자리가 {ASSET_ROOT}/<theme>.png 규칙을 따른다",
+          all(path == f"{ASSET_ROOT}/{name}.png"
+              for name, path in THEME_IMAGE_MAP.items()))
+
+    asset_dir = Path(ASSET_ROOT)
+    check("그림을 넣을 폴더가 이미 만들어져 있다", asset_dir.is_dir(),
+          str(asset_dir.resolve()))
+    check("폴더에 넣는 방법이 적혀 있다", (asset_dir / "README.md").is_file())
+
+    # 1x1 짜리 진짜 png 한 장. (파일이 '있다/없다' 갈림길만 보면 됩니다)
+    one_pixel_png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAF"
+        "AAH/q842iQAAAABJRU5ErkJggg=="
+    )
+    probe = VisualTheme.GROUNDING
+    target = Path(THEME_IMAGE_MAP[probe.value])
+    if target.exists():
+        # 사용자가 이미 진짜 그림을 넣어두었다면 건드리지 않습니다.
+        check("이미 들어와 있는 그림을 그대로 쓴다", has_theme_asset(probe),
+              str(theme_asset_file(probe)))
+        check("그 테마는 fallback 아트가 아니라 그림을 그린다",
+              "<img" in art_html({**EXAMPLE_CARD, "visual_theme": probe.value}))
+        return
+
+    card = {**EXAMPLE_CARD, "visual_theme": probe.value}
+    check("파일이 없으면 fallback 아트를 그린다",
+          "<svg" in art_html(card) and not has_theme_asset(probe))
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(one_pixel_png)
+    try:
+        check("파일을 넣자마자 그림으로 바뀐다 (코드 수정 없이)",
+              has_theme_asset(probe))
+        drawn = art_html(card)
+        check("그 그림을 <img> 로 그린다",
+              '<img class="halmae-yearcard-image"' in drawn
+              and "data:image/png;base64," in drawn)
+        check("그림이 들어오면 fallback 아트는 그리지 않는다", "<svg" not in drawn)
+        check("그림에도 같은 금색 프레임이 씌워진다",
+              'class="halmae-yearcard-frame"' in drawn)
+        check("읽는 사람을 위한 대체 글이 붙는다", scene_of(probe) in drawn)
+
+        # 카드에 적힌 image_url 이 파일보다 셉니다. (이미지 생성 API 자리)
+        with_url = {**card, "image_url": "https://cdn.example.com/g.png"}
+        check("카드에 적힌 주소가 파일보다 우선한다",
+              "https://cdn.example.com/g.png" in art_html(with_url)
+              and "data:image/png;base64," not in art_html(with_url))
+
+        # 파일을 바꿔 넣으면 앱을 다시 띄우지 않아도 새 그림이 나와야 합니다.
+        before = art_html(card)
+        target.write_bytes(one_pixel_png + b"\x00")
+        check("파일을 바꿔 넣으면 다시 읽는다 (mtime·size 를 열쇠에 넣었다)",
+              art_html(card) != before)
+
+        # 너무 큰 파일은 화면을 무겁게 만들므로 fallback 으로 내려갑니다.
+        target.write_bytes(b"\x00" * (card_visuals._MAX_ASSET_BYTES + 1))
+        check("6MB 를 넘는 파일은 fallback 으로 내려간다",
+              "<svg" in art_html(card))
+    finally:
+        target.unlink(missing_ok=True)
+
+    check("임시 파일을 남기지 않았다", not target.exists())
+    check("치우고 나면 다시 fallback 아트다", "<svg" in art_html(card))
 
 
 # ===============================================================
@@ -473,6 +648,7 @@ def main() -> int:
     verify_reuse()
     verify_art()
     verify_app_wiring()
+    verify_assets()
 
     if "--preview" in sys.argv:
         section("미리보기")
