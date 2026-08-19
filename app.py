@@ -30,6 +30,7 @@ import streamlit as st
 
 import analytics
 import card_store
+import card_visuals
 import db
 import theme
 from astrology import AstrologyError, compute_astrology
@@ -1061,7 +1062,13 @@ STEP_RENDERERS = {1: render_step1, 2: render_step2, 3: render_step3}
 #  올해의 카드
 #
 #  파이썬이 계산한 사주·점성술 값 + 올해 간지(세운)만으로
-#  올해를 한 장으로 압축합니다. 아직 이미지는 만들지 않고 글자로만 보여줍니다.
+#  올해를 한 장으로 압축합니다. 타로 카드처럼 가운데에 그림이 한 장 들어갑니다.
+#
+#  [그림] card_data 안의 두 칸이 그림을 정합니다. (테이블 칸은 늘리지 않습니다)
+#      visual_theme  여덟 개 중 하나. Gemini 가 사주·점성술·올해 간지만 보고 고릅니다.
+#      image_url     그려진 일러스트 주소. 아직 없으면 선화 placeholder 를 그립니다.
+#  두 칸 모두 카드와 함께 저장되므로, 다시 들어와도 같은 그림이 나옵니다.
+#  (그림 주제를 Gemini 에게 다시 묻지 않습니다 — card_visuals.py 참고)
 #
 #  [정책] 카드는 "같은 사람 + 같은 출생정보 + 같은 해"에 딱 한 장입니다.
 #  연애로 들어와도 취업으로 들어와도 같은 카드가 나와야 하므로,
@@ -1156,7 +1163,10 @@ def ensure_year_card() -> None:
             )
             st.session_state.year_card = card
             st.session_state.year_card_cached = False
-            card_store.save_card(key, card.model_dump(), year, MODEL_LOG_NAME)
+            # mode="json" — visual_theme 을 enum 이 아니라 글자("clarity")로 남깁니다.
+            # 저장소가 무엇이든(Supabase jsonb · 로컬 파일) 같은 모양으로 들어갑니다.
+            stored = card.model_dump(mode="json")
+            card_store.save_card(key, stored, year, MODEL_LOG_NAME)
         except HalmaeError as exc:
             log.warning("올해의 카드 실패 (사용자 안내) — %s", exc)
             st.session_state.year_card_error = str(exc)
@@ -1224,13 +1234,20 @@ def render_year_card() -> None:
             f'{_escape(ganji["띠"])}띠</p>'
         )
 
+    # 가운데 그림 칸 — image_url 이 있으면 그 그림, 없으면 선화 placeholder.
+    # 어느 쪽인지는 card_visuals 가 정합니다. (app.py 는 자리만 내어줍니다)
+    art_html = card_visuals.art_html(card)
+
     st.markdown(
+        '<div class="halmae-yearcard-stage">'
         '<div class="halmae-yearcard">'
-        f'<p class="halmae-yearcard-year">{card.year} 올해의 카드</p>'
+        f'<p class="halmae-yearcard-year">{card.year} YEAR CARD</p>'
+        f'<div class="halmae-yearcard-art">{art_html}</div>'
         f'<p class="halmae-yearcard-title">{_escape(card.title)}</p>'
         f'<p class="halmae-yearcard-keyword">키워드 · {_escape(card.keyword)}</p>'
         f'<p class="halmae-yearcard-message">"{_escape(card.message)}"</p>'
         f"{ganji_html}"
+        "</div>"
         "</div>",
         unsafe_allow_html=True,
     )
@@ -1261,6 +1278,12 @@ def render_year_card() -> None:
             ("저장된 카드를 그대로 꺼내 썼어요 (Gemini 호출 없음)"
              if st.session_state.year_card_cached
              else "새로 만들어 저장했어요 (Gemini 1회 호출)")
+        )
+        # 그림 주제와 그림 주소 — 일러스트를 붙이기 전까지 여기서 확인합니다.
+        st.caption(
+            f"그림 주제 · {card.visual_theme.value}"
+            + (f" · 일러스트 {card.image_url}" if card.image_url
+               else " · 일러스트 없음(placeholder)")
         )
         if st.button("이 카드만 다시 뽑기 (개발자용)",
                      type="secondary", key="year_card_redraw", width="stretch"):

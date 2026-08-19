@@ -813,78 +813,190 @@ def _css_result(t: dict) -> str:
 
 
 def _css_yearcard(t: dict) -> str:
-    """올해의 카드 — 자개장 비밀 서랍에서 꺼낸 부적"""
+    """올해의 카드 — 세로형 타로 카드
+
+    구조 (위에서 아래로)
+        머리   2026 YEAR CARD
+        그림   일러스트가 들어갈 자리 (지금은 선화 placeholder)
+        발치   THE ____ · 키워드 · 한 줄 메시지
+
+    [폭] 카드는 min(100%, 300px) 입니다. 고정 폭을 쓰지 않으므로
+         320px 짜리 좁은 화면에서도 가로 스크롤이 생기지 않습니다.
+    [높이] 그림 칸에 max-height 를 걸어, 화면이 짧은 기기에서
+         카드 한 장이 화면을 다 잡아먹지 않게 했습니다.
+    [장식] 금선은 두 겹(바깥 굵은 선 + 안쪽 얇은 선)까지만.
+         네 귀퉁이 마름모 외에는 무늬를 넣지 않습니다 — 글자가 먼저입니다.
+    """
     return f"""
-    /* 이중 테두리(바깥 금선 + 안쪽 얇은 선)로 부적 느낌.
-       바탕에 자적(紫赤)을 깔아 왕실 문서 같은 무게를 줍니다. */
+    /* 카드를 가운데 세우는 자리 */
+    .halmae-yearcard-stage {{
+        display: flex;
+        justify-content: center;
+        margin: 1.2rem 0 1.4rem 0;
+    }}
+
+    /* 카드 본체 — 세로형(약 2:3). 폭은 화면을 넘지 않습니다. */
     .halmae-yearcard {{
         position: relative;
+        box-sizing: border-box;
+        width: 100%;
+        max-width: 300px;
         background:
-            radial-gradient(95% 70% at 50% 0%,
-                rgba(210, 166, 46, 0.16) 0%, transparent 62%),
+            radial-gradient(90% 55% at 50% 12%,
+                rgba(210, 166, 46, 0.18) 0%, transparent 60%),
             linear-gradient(180deg,
-                {t['royal_red_deep']} 0%, {t['bg_panel']} 55%, {t['bg_deep']} 100%);
-        border: 1px solid {t['gold_dim']};
+                {t['royal_red_deep']} 0%, {t['bg_panel']} 48%, {t['bg_deep']} 100%);
+        border: 1px solid {t['gold']};
         border-radius: {t['radius_card']};
-        padding: 2.2rem 1.3rem 1.9rem 1.3rem;
-        margin: 1rem 0;
+        padding: 0.95rem 0.85rem 1.15rem 0.85rem;
         text-align: center;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
     }}
+    /* 안쪽 얇은 금선 — 부적/왕실 문서의 이중 테두리 */
     .halmae-yearcard::before {{
         content: "";
         position: absolute;
-        inset: 7px;
-        border: 1px solid rgba(243, 216, 143, 0.32);
+        inset: 6px;
+        border: 1px solid rgba(243, 216, 143, 0.30);
         border-radius: 2px;
         pointer-events: none;
     }}
-    .halmae-yearcard-year {{
-        font-family: {t['font_latin']};
-        font-size: 0.78rem;
-        letter-spacing: 0.3em;
-        text-indent: 0.3em;
-        color: {t['gold_bright']};
-        margin: 0 0 1rem 0;
+    /* 머리 장식 — 왕실 문서의 인장 자리처럼 가운데 마름모 하나.
+       전통 문양은 여기까지만 둡니다. 더 넣으면 글자가 묻힙니다. */
+    .halmae-yearcard::after {{
+        content: "◆";
+        position: absolute;
+        top: 10px;
+        left: 0;
+        right: 0;
+        font-size: 0.4rem;
+        line-height: 1;
+        color: {t['gold_dim']};
+        pointer-events: none;
     }}
-    .halmae-yearcard-title {{
+
+    /* [상단] 2026 YEAR CARD */
+    .halmae-yearcard-year {{
+        position: relative;
         font-family: {t['font_latin']};
-        /* 한글 제목이 낱말 중간에서 끊기지 않도록 (좁은 화면에서 특히) */
+        font-size: 0.68rem;
+        letter-spacing: 0.34em;
+        text-indent: 0.34em;
+        color: {t['gold_bright']};
+        margin: 0.8rem 0 0.7rem 0;
+    }}
+
+    /* [중앙] 그림 자리 — 세로 3:4.
+       image_url 이 있으면 <img>, 없으면 선화 placeholder 가 들어옵니다. */
+    .halmae-yearcard-art {{
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        aspect-ratio: 3 / 4;
+        max-height: 40vh;
+        margin: 0 auto 0.85rem auto;
+        padding: 0.5rem;
+        box-sizing: border-box;
+        background:
+            radial-gradient(70% 55% at 50% 42%,
+                rgba(210, 166, 46, 0.10) 0%, transparent 70%),
+            {t['bg_deep']};
+        border: 1px solid {t['line_gold']};
+        border-radius: 2px;
+        overflow: hidden;
+    }}
+    .halmae-yearcard-svg {{
+        /* 장면 설명 한 줄과 자리를 나눠 씁니다.
+           min-height: 0 이 없으면 flex 안에서 줄어들지 못해 칸을 뚫습니다. */
+        flex: 1 1 auto;
+        min-height: 0;
+        width: 100%;
+        fill: none;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+    }}
+    /* 선화에 쓰는 네 가지 붓 — card_visuals.py 가 class 만 붙여 보냅니다 */
+    .halmae-yearcard-svg .hm-line {{
+        stroke: {t['gold_bright']};
+        stroke-width: 2.1;
+    }}
+    .halmae-yearcard-svg .hm-soft {{
+        stroke: {t['gold_dim']};
+        stroke-width: 1.2;
+        opacity: 0.85;
+    }}
+    .halmae-yearcard-svg .hm-red {{
+        stroke: {t['royal_red_soft']};
+        stroke-width: 2.1;
+    }}
+    .halmae-yearcard-svg .hm-jade {{
+        stroke: {t['jade_soft']};
+        stroke-width: 2.1;
+    }}
+    /* 진짜 일러스트가 들어왔을 때 (image_url).
+       object-fit: cover — 그림 비율이 칸과 달라도 찌그러지지 않습니다.
+       대신 가장자리가 조금 잘리므로, 그림은 가운데에 여백을 두고 그리게 합니다. */
+    .halmae-yearcard-image {{
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+    }}
+    /* 그림 밑 한 줄 — 무슨 장면인지 */
+    .halmae-yearcard-scene {{
+        font-family: {t['font_body']};
+        font-size: 0.62rem;
+        letter-spacing: 0.08em;
+        word-break: keep-all;
+        color: {t['ivory_low']};
+        margin: 0.35rem 0 0 0;
+    }}
+
+    /* [하단] THE ____ · 키워드 · 한 줄 메시지 */
+    .halmae-yearcard-title {{
+        position: relative;
+        font-family: {t['font_latin']};
+        /* 제목이 낱말 중간에서 끊기지 않도록 (좁은 화면에서 특히) */
         word-break: keep-all;
         overflow-wrap: anywhere;
-        font-size: 2.15rem;
+        font-size: 1.55rem;
         font-weight: 600;
-        letter-spacing: 0.1em;
-        line-height: 1.25;
+        letter-spacing: 0.08em;
+        line-height: 1.2;
         color: {t['gold_bright']};
-        margin: 0 0 0.85rem 0;
-        text-shadow: 0 0 20px rgba(243, 216, 143, 0.35);
+        margin: 0 0 0.55rem 0;
+        text-shadow: 0 0 18px rgba(243, 216, 143, 0.32);
     }}
     .halmae-yearcard-keyword {{
         display: inline-block;
         font-family: {t['font_title']};
-        font-size: 0.85rem;
-        letter-spacing: 0.14em;
+        font-size: 0.78rem;
+        letter-spacing: 0.12em;
+        word-break: keep-all;
         color: {t['text_on_gold']};
         background: linear-gradient(180deg, #F0D07A, {t['gold']});
         border: 1px solid {t['gold_bright']};
         border-radius: {t['radius_pill']};
-        padding: 0.25rem 0.95rem;
-        margin: 0 0 1.2rem 0;
+        padding: 0.2rem 0.8rem;
+        margin: 0 0 0.7rem 0;
     }}
     .halmae-yearcard-message {{
         font-family: {t['font_title']};
-        font-size: 1.12rem;
+        font-size: 0.95rem;
         font-weight: 700;
-        line-height: 2;
+        line-height: 1.75;
+        word-break: keep-all;
         color: {t['ivory']};
         margin: 0;
     }}
     .halmae-card-foot {{
         font-family: {t['font_latin']};
-        font-size: 0.75rem;
-        letter-spacing: 0.2em;
+        font-size: 0.68rem;
+        letter-spacing: 0.18em;
         color: {t['ivory_low']};
-        margin: 1.3rem 0 0 0;
+        margin: 0.8rem 0 0.2rem 0;
     }}
     """
 
@@ -1177,13 +1289,15 @@ def _css_mobile(t: dict) -> str:
         }}
         .halmae-myeongsik-value {{ font-size: 0.92rem; }}
 
-        /* 올해의 카드 */
-        .halmae-yearcard {{ padding: 1.7rem 0.9rem 1.5rem 0.9rem; }}
+        /* 올해의 카드 — 좁은 화면에서도 세로형 비율을 지킵니다.
+           폭은 max-width 라 화면을 넘지 않고, 그림 칸 높이만 줄입니다. */
+        .halmae-yearcard {{ padding: 0.8rem 0.7rem 1rem 0.7rem; }}
         .halmae-yearcard-title {{
             font-size: 1.6rem;
             letter-spacing: 0.04em;
         }}
-        .halmae-yearcard-message {{ font-size: 1.02rem; line-height: 1.9; }}
+        .halmae-yearcard-message {{ font-size: 0.92rem; line-height: 1.7; }}
+        .halmae-yearcard-art {{ max-height: 34vh; }}
 
         /* Premium */
         .halmae-premium {{ padding: 1.5rem 0.9rem; }}
@@ -1202,6 +1316,8 @@ def _css_mobile(t: dict) -> str:
         .block-container {{ padding-left: 0.8rem; padding-right: 0.8rem; }}
         .halmae-title-sm {{ font-size: 2.1rem; }}
         .halmae-yearcard-title {{ font-size: 1.42rem; }}
+        .halmae-yearcard-art {{ max-height: 30vh; }}
+        .halmae-yearcard-scene {{ font-size: 0.58rem; }}
         .halmae-myeongsik-value {{ font-size: 0.86rem; }}
     }}
     """

@@ -27,7 +27,14 @@ from time import sleep
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from card_visuals import (
+    FALLBACK_VISUAL_THEME,
+    VisualTheme,
+    normalize_theme,
+    prompt_choices,
+)
 
 # ===============================================================
 #  어떤 모델을 쓸지 · 진짜로 부를지 (설정은 config.py 한 곳에 있습니다)
@@ -341,8 +348,8 @@ class Step3Answer(BaseModel):
     closing: str = Field(description="할매가 마지막으로 남기는 한마디. 두세 문장.")
 
 
-class YearCard(BaseModel):
-    """올해의 카드 — 올해 가장 중요한 메시지를 한 장으로 압축한 것.
+class YearCardDraft(BaseModel):
+    """올해의 카드 — Gemini 가 채워 보내는 칸만 모은 모양.
 
     저장하거나 남에게 보여주고 싶을 만큼 간결해야 합니다.
     길게 쓰면 카드가 아니라 또 하나의 보고서가 됩니다.
@@ -382,6 +389,50 @@ class YearCard(BaseModel):
         "'이런 상황이 오면 너는 이렇게 하더라' 식으로 구체적인 버릇을 짚을 것. "
         "특정 고민 분야가 아니라, 어느 영역에서든 되풀이되는 버릇으로 쓸 것."
     )
+    visual_theme: VisualTheme = Field(
+        description="이 카드에 들어갈 그림의 주제. 아래 여덟 개 중 딱 하나만 "
+        "고를 것. 새로 지어내거나 문장으로 쓰지 말 것: "
+        + ", ".join(item.value for item in VisualTheme)
+        + ". 사주·점성술·올해 간지만 보고 고를 것. "
+        "고민 분야나 질문은 주어지지 않았으니 짐작해서 고르지 말 것."
+    )
+
+
+class YearCard(YearCardDraft):
+    """저장하고 화면에 그리는 카드 — Gemini 가 쓴 칸 + 우리가 붙이는 칸.
+
+    [Gemini 에게 물을 때는 이 모양을 쓰지 않습니다]
+        response_schema 로는 YearCardDraft 를 씁니다.
+        image_url 을 스키마에 넣어두면 모델이 있지도 않은 주소를 지어냅니다.
+        그림 주소는 사람이(우리가) 붙이는 값이지, 모델이 쓰는 값이 아닙니다.
+
+    [옛날 카드도 이 모양으로 읽힙니다]
+        Supabase 에 이미 저장된 카드에는 visual_theme · image_url 칸이 없습니다.
+        그 카드를 지우거나 다시 만들지 않고 그대로 읽을 수 있도록,
+        여기서는 visual_theme 에 기본값을 두고 이상한 값이 와도 받아냅니다.
+    """
+
+    visual_theme: VisualTheme = Field(
+        default=FALLBACK_VISUAL_THEME,
+        description="카드 그림의 주제. 옛날 카드에는 없을 수 있습니다.",
+    )
+    image_url: str | None = Field(
+        default=None,
+        description="그려진 카드 일러스트 주소. 아직 없으면 비워둡니다. "
+        "있으면 그림을, 없으면 visual_theme placeholder 를 보여줍니다.",
+    )
+
+    @field_validator("visual_theme", mode="before")
+    @classmethod
+    def _accept_any_theme(cls, value):
+        """옛날 카드(칸 없음)·오타·대문자를 전부 여덟 개 중 하나로 내립니다.
+
+        여기서 예외를 내면 저장된 카드를 못 읽어 Gemini 를 다시 부르게 됩니다.
+        그러면 "같은 사람 + 같은 해 = 같은 카드" 약속이 깨집니다.
+        """
+        if value is None or value == "":
+            return FALLBACK_VISUAL_THEME
+        return normalize_theme(value)
 
 
 STEP_SCHEMAS = {1: Step1Answer, 2: Step2Answer, 3: Step3Answer}
@@ -899,6 +950,16 @@ def build_year_card_task() -> str:
 - basis    : 왜 이 카드인지. 올해 간지와 이 사람 사주/점성술을 연결해 150자 안팎
 - actions  : 올해 가장 중요한 행동 원칙 1~2개 (3개 이상 금지)
 - caution  : 조심할 패턴 딱 1개
+- visual_theme : 이 카드에 들어갈 그림의 주제. 아래 여덟 개 중 딱 하나
+
+[그림 주제(visual_theme) 고르는 법 — 반드시 지킬 것]
+이 카드는 타로 카드처럼 가운데에 그림이 한 장 들어간다.
+아래 여덟 개 중, 위에서 정한 카드의 핵심 테마와 가장 잘 맞는 것 하나만 골라라.
+""" + prompt_choices() + """
+- 반드시 왼쪽에 적힌 영문 낱말 그대로 적어라. (예: breakthrough)
+- 새로 지어내거나 두 개를 고르거나 문장으로 설명하지 마라.
+- 사주·점성술·올해 간지만 보고 골라라.
+  고민 분야는 주어지지 않았다. 짐작해서 고르지 마라.
 
 [행동 원칙(actions) 쓰는 법 — 반드시 지킬 것]
 여러 삶의 영역에 그대로 옮겨 쓸 수 있는 수준의 원칙으로 쓴다.
@@ -1035,7 +1096,8 @@ def ask_year_card(
     config = types.GenerateContentConfig(
         system_instruction=payload["system_instruction"],
         response_mime_type="application/json",
-        response_schema=YearCard,
+        # image_url 은 스키마에 넣지 않습니다 — 넣으면 모델이 주소를 지어냅니다.
+        response_schema=YearCardDraft,
         max_output_tokens=MAX_OUTPUT_TOKENS,
         temperature=payload["temperature"],
     )
@@ -1072,7 +1134,9 @@ def ask_year_card(
             "카드를 받아오지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도해주세요."
         ) from exc
 
-    card = _parse_answer(response, YearCard)
+    draft = _parse_answer(response, YearCardDraft)
+    # 그림 주소는 아직 없습니다. (다음 단계에서 image_url 을 채워 넣습니다)
+    card = YearCard.model_validate(draft.model_dump())
 
     # 연도는 파이썬이 계산한 값이 정답입니다. (모델이 다른 해를 적었어도 바로잡습니다)
     card.year = year_ganji["연도"]
@@ -1083,8 +1147,8 @@ def ask_year_card(
     # 제목·키워드는 그 사람의 사주로 지어진 문구라 Gemini 응답 본문에 해당합니다.
     # (내용을 봐야 할 때는 개발자 모드 화면이나 test_year_card_payload.py 를 씁니다)
     logger.info(
-        "올해의 카드 완료 · 모델 %s · %d년 카드 · 행동 %d개",
-        GEMINI_MODEL, card.year, len(card.actions),
+        "올해의 카드 완료 · 모델 %s · %d년 카드 · 행동 %d개 · 그림 %s",
+        GEMINI_MODEL, card.year, len(card.actions), card.visual_theme.value,
     )
     return card
 

@@ -39,6 +39,14 @@
         stable_key   위에서 만든 SHA-256 열쇠 (unique — 같은 열쇠는 한 줄만)
         card_year    몇 년도 카드인지
         card_data    카드 내용(JSON). 개인정보는 한 글자도 들어가지 않습니다.
+                     title · keyword · message · basis · actions · caution
+                     · visual_theme (카드 그림의 주제, 여덟 개 중 하나)
+                     · image_url    (그려진 일러스트 주소. 아직 없으면 없음)
+
+    visual_theme 와 image_url 은 card_data(jsonb) 안에 함께 들어갑니다.
+    테이블에 새 칸을 만들지 않습니다 — 이미 저장된 카드도 그대로 둡니다.
+    같은 열쇠의 카드가 있으면 그림 주제까지 그 값을 그대로 씁니다.
+    (다시 들어와도 Gemini 에게 visual_theme 을 새로 묻지 않습니다)
 
     환경변수(SUPABASE_URL · SUPABASE_SECRET_KEY)가 없으면
     개발용 로컬 파일(data/cards.json)로 자동으로 내려옵니다.
@@ -176,7 +184,11 @@ def build_card_key(
 # "지금 본 카드"와 "저장된 카드"가 늘 같습니다. (다시 열어도 같은 카드)
 NAME_REPLACEMENT = "너"
 
-# 카드에서 글자가 들어 있는 칸. 나머지(year 등)는 손대지 않습니다.
+# 카드에서 글자가 들어 있는 칸. 나머지는 손대지 않습니다.
+#   year         숫자
+#   visual_theme 여덟 개 중 하나인 고정 낱말 — 이름이 들어갈 자리가 아닙니다.
+#                (여기에 넣으면 "너"로 바뀌어 그림을 못 찾습니다)
+#   image_url    그림 주소 — 글이 아니라 주소입니다.
 CARD_TEXT_FIELDS = ("title", "keyword", "message", "basis", "caution")
 CARD_LIST_FIELDS = ("actions",)
 
@@ -556,6 +568,8 @@ def _print_records(records: dict) -> None:
         card = record.get("card", {})
         print(f"  {card_key[:16]}…  {record.get('year')}  "
               f"{card.get('title', '?'):<20} {card.get('keyword', '')}")
+        print(f"      그림 · {card.get('visual_theme', '(없음 — 기본값으로 그림)')}"
+              f" · 일러스트 {card.get('image_url') or '없음(placeholder)'}")
         print(f"      만든 때 {record.get('created_at', '?')} · "
               f"모델 {record.get('model', '?')}")
         actions = card.get("actions") or []

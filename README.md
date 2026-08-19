@@ -102,6 +102,9 @@ python analytics.py     # 터미널에서 Funnel 지표 보기
 
 python test_saju_pipeline.py      # 사주 계산 파이프라인 (Gemini 호출 없음)
 python test_year_card_payload.py  # 올해의 카드가 고민과 독립인지 (Gemini 호출 없음)
+python test_year_card_visual.py   # 카드 그림 구조 · 옛날 카드 호환 (Gemini 호출 없음)
+python test_year_card_visual.py --preview   # 카드 여덟 장을 HTML 로 그려보기
+python card_visuals.py            # 그림 주제 여덟 가지와 이미지 프롬프트
 ```
 
 ---
@@ -124,6 +127,23 @@ Premium 관련 내용 · 1~3단계 대화 이력 · 이름
 `stable_key` 도 같은 규칙입니다 — 연도와 정규화된 출생정보만 들어갑니다.
 행동 지침(actions)도 "이력서를 써라"처럼 특정 고민에 종속되지 않고,
 여러 삶의 영역에 적용할 수 있는 원칙으로 씁니다.
+
+### 카드 그림 (타로 카드형)
+
+카드는 세로형 타로 카드로 그려집니다 — 상단 `YEAR CARD` · 중앙 그림 · 하단 `THE ___`.
+그림을 정하는 두 칸은 `card_data`(jsonb) **안에** 들어갑니다.
+`cards` 테이블에 새 칸을 만들지 않으므로 이미 저장된 카드는 건드리지 않습니다.
+
+| 칸 | 값 | 누가 정하나 |
+|---|---|---|
+| `visual_theme` | `breakthrough` `expansion` `balance` `transformation` `grounding` `connection` `clarity` `renewal` 중 하나 | Gemini (사주 · 점성술 · 올해 간지만 보고) |
+| `image_url` | 그려진 일러스트 주소 (없어도 됨) | 사람 — 모델에게 묻지 않습니다 |
+
+- `image_url` 이 있으면 그 그림을, 없으면 `visual_theme` 에 맞는 선화 placeholder 를 그립니다.
+- 두 칸 모두 카드와 함께 저장되므로 **다시 들어와도 같은 그림**입니다.
+  (재접속 때 `visual_theme` 을 Gemini 에게 다시 묻지 않습니다)
+- 이 칸들이 없는 **옛날 카드**는 지우지 않습니다. `balance` 로 읽어 그대로 보여줍니다.
+- 그림 여덟 장과 다음 단계용 이미지 프롬프트는 `card_visuals.py` 한 곳에 있습니다.
 
 ```bash
 python card_store.py                      # 저장된 카드 목록
@@ -158,6 +178,7 @@ config.py         ★ 설정과 열쇠 읽기 (get_secret)
 db.py             Supabase 연결
 analytics.py      행동 로그 · 피드백 저장과 Funnel 집계
 card_store.py     올해의 카드 저장 · stable key
+card_visuals.py   카드 그림 — visual_theme 여덟 개 · placeholder · image_url
 halmae_ai.py      할매 캐릭터 · 프롬프트 · Gemini 호출
 mock_ai.py        Gemini 없이 쓰는 가짜 응답
 saju.py           사주 네 기둥 · 오행 · 간지

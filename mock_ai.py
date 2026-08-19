@@ -401,7 +401,12 @@ def mock_step3(answers=None, saju=None, astro=None) -> Step3Answer:
 # ===============================================================
 #  올해의 카드
 # ===============================================================
-def mock_year_card(year: int = 2026, year_ganji: dict | None = None) -> YearCard:
+def mock_year_card(
+    year: int = 2026,
+    year_ganji: dict | None = None,
+    visual_theme: str = "clarity",
+) -> YearCard:
+    """개발용 예시 카드. visual_theme 을 바꿔 그림 여덟 개를 확인할 수 있습니다."""
     ganji_text = ""
     if year_ganji:
         ganji_text = (
@@ -428,6 +433,12 @@ def mock_year_card(year: int = 2026, year_ganji: dict | None = None) -> YearCard
             "남들이 다 그렇게 한다는 말에 네 기준을 슬며시 바꿔버리는 버릇을 "
             "가장 조심해야 한다."
         ),
+        # 그림 주제 — 실제로는 Gemini 가 여덟 개 중 하나를 고릅니다.
+        # 여덟 가지 그림을 다 보고 싶으면 test_year_card_visual.py 를 쓰세요.
+        visual_theme=visual_theme,
+        # 일러스트는 아직 없습니다. image_url 이 비어 있으면
+        # visual_theme 에 맞는 선화 placeholder 가 대신 그려집니다.
+        image_url=None,
     )
 
 
