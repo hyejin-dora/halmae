@@ -23,6 +23,7 @@
     streamlit run app.py
 """
 
+import hashlib
 import logging
 from datetime import date, time, timedelta
 
@@ -32,26 +33,48 @@ import analytics
 import card_store
 import card_visuals
 import db
+import perf
+import progress
 import theme
 from astrology import AstrologyError, compute_astrology
 from config import USE_DEV_MODE, USE_MOCK_AI
+from daeun import (
+    GENDER_SKIPPED_FOR_PROMPT,
+    GENDER_SKIPPED_NOTE,
+    DaeunError,
+    compute_daeun,
+    compute_sewoon,
+    describe as describe_luck,
+    normalize_gender,
+)
 from halmae_ai import (
     GEMINI_MODEL,
     IS_DEV_MODEL,
-    LOADING_MESSAGES,
     MODEL_LABEL,
     MODEL_LOG_NAME,
     MODEL_STAGE,
     NEXT_BUTTON_LABELS,
     PROD_MODEL,
+    RELATIONSHIP_CONCERN,
+    RELATIONSHIP_CONTEXT_KEY,
+    RELATIONSHIP_OPTIONS,
+    RELATIONSHIP_QUESTION,
+    RELATIONSHIP_UNKNOWN,
+    STEP1_YEAR_FLOW_TEASER,
     STEP_TITLES,
-    YEAR_CARD_LOADING,
+    YEAR_FLOW_BUTTON,
+    YEAR_FLOW_ERROR,
+    YEAR_FLOW_SUBTITLE,
+    YEAR_FLOW_SUBTITLE_SEWOON,
+    YEAR_FLOW_TITLE,
     HalmaeError,
     YearCard,
     answer_length,
     ask_halmae,
     ask_year_card,
+    ask_year_flow,
     build_prompt,
+    build_year_flow_prompt,
     format_year_card_text,
 )
 from saju import (
@@ -208,10 +231,54 @@ if "year_card_key" not in st.session_state:
 if "year_card_fingerprint" not in st.session_state:
     st.session_state.year_card_fingerprint = None
 
+# --- 올해의 흐름 (대운 × 세운) ----------------------------------
+#     Step 3 과 올해의 카드 사이에 놓이는 다리 구간입니다.
+#     대운·세운 값은 파이썬(daeun.py)이 계산하고, 할매는 해석만 합니다.
+if "daeun_info" not in st.session_state:
+    st.session_state.daeun_info = None
+
+if "daeun_error" not in st.session_state:
+    st.session_state.daeun_error = None
+
+# 대운을 '일부러' 계산하지 않은 경우(성별 미선택)를 실패와 구별합니다.
+#     daeun_error   계산하려다 실패했다  → 안내 + 다시 시도 버튼
+#     daeun_skipped 애초에 계산하지 않았다 → 세운만으로 흐름을 보여줍니다
+if "daeun_skipped" not in st.session_state:
+    st.session_state.daeun_skipped = False
+
+if "sewoon_info" not in st.session_state:
+    st.session_state.sewoon_info = None
+
+if "year_flow" not in st.session_state:
+    st.session_state.year_flow = None
+
+if "year_flow_error" not in st.session_state:
+    st.session_state.year_flow_error = None
+
+# 버튼을 누른 직후 한 번만 서는 표시.
+# 이 표시가 켜져 있는 동안에는 버튼을 그리지 않으므로,
+# 두 번 눌러서 같은 요청이 두 번 나가는 일이 없습니다.
+if "year_flow_pending" not in st.session_state:
+    st.session_state.year_flow_pending = False
+
+if "year_card_pending" not in st.session_state:
+    st.session_state.year_card_pending = False
+
 # --- 사용자 피드백 ---------------------------------------------
 #     이 세션의 최종 답: None / "positive" / "negative"
 if "feedback_result" not in st.session_state:
     st.session_state.feedback_result = None
+
+# --- 개발용 처리시간 -------------------------------------------
+#     {"gemini_step1": 8.31, ...} — 개발자 모드에서만 화면에 보여줍니다.
+#     사용자에게는 절대 보여주지 않습니다. (개인정보도 들어가지 않습니다)
+if "perf" not in st.session_state:
+    st.session_state.perf = {}
+
+# 지금 화면에 담긴 계산값이 '어떤 입력'으로 나온 것인지 가리키는 지문.
+# 입력이 바뀌면 이 값이 달라지고, 예전 계산값을 통째로 비웁니다.
+if "calc_fingerprint" not in st.session_state:
+    st.session_state.calc_fingerprint = None
 
 
 def _write_event(event_name: str) -> None:
@@ -282,10 +349,136 @@ def reset_conversation() -> None:
     st.session_state.year_card_error = None
     st.session_state.year_card_cached = False
     st.session_state.year_card_key = None
+    st.session_state.year_card_pending = False
+    # 올해의 흐름(할매의 해석)도 비웁니다.
+    # 대운·세운 '계산값'은 출생정보가 그대로면 다시 계산할 필요가 없으므로
+    # 여기서 지우지 않습니다. (지우는 곳은 clear_calculations 한 곳뿐입니다)
+    st.session_state.year_flow = None
+    st.session_state.year_flow_error = None
+    st.session_state.year_flow_pending = False
     # 새 답변에 대해 다시 평가할 수 있도록 피드백 버튼도 비워둡니다.
     # 피드백 버튼도 '아직 안 고른' 상태로 되돌립니다.
     # (버튼은 st.feedback 과 달리 남는 위젯 상태가 없어 이 한 줄이면 됩니다.)
     st.session_state.feedback_result = None
+
+
+# ===============================================================
+#  계산 준비 — 같은 입력이면 두 번 계산하지 않습니다
+#
+#  [왜 필요한가]
+#      Streamlit 은 버튼 하나만 눌러도 스크립트를 처음부터 다시 실행합니다.
+#      계산을 그냥 두면 화면이 다시 그려질 때마다 사주를 다시 뽑고,
+#      출생지역을 찾으러 인터넷에 또 나갑니다. 그만큼 화면이 늦게 뜹니다.
+#
+#  [두 겹으로 막습니다]
+#      1) 지문(fingerprint)  — 입력이 그대로면 아예 계산 함수로 들어가지 않습니다.
+#      2) st.cache_data      — 같은 입력이면 계산 결과를 꺼내 씁니다.
+#                              (브라우저를 새로 열어도, 다른 사람이 같은 값을
+#                               넣어도 재사용됩니다)
+#
+#  [입력이 바뀌면]
+#      지문이 달라지므로 예전 계산값을 통째로 비웁니다.
+#      옛 사주에 새 별자리가 섞이는 일이 없습니다.
+# ===============================================================
+#  계산 결과를 얼마나 오래 들고 있을지 (초). 1시간.
+CACHE_TTL_SECONDS = 3600
+#  한 번에 기억해둘 사람 수. 넘으면 오래된 것부터 버립니다.
+CACHE_MAX_ENTRIES = 128
+
+
+def input_fingerprint(answers: dict) -> str:
+    """이 계산이 '어떤 입력'으로 나온 것인지 가리키는 짧은 지문.
+
+    되돌릴 수 없는 SHA-256 요약값입니다. 세션 안에서만 쓰고,
+    Supabase 에도 로그에도 남기지 않습니다. (원문이 들어 있는 값이라서요)
+    """
+    parts = [
+        str(answers.get("생년월일") or ""),
+        str(answers.get("출생시간") or ""),
+        "1" if answers.get("출생시간 모름") else "0",
+        str(answers.get("달력 유형") or ""),
+        str(answers.get("평달/윤달") or ""),
+        (answers.get("출생지역") or "").strip().lower(),
+        str(answers.get("성별") or ""),
+    ]
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+
+
+# ---------------------------------------------------------------
+#  계산 알맹이 — 화면(st.session_state)을 모르는 순수 함수들
+#      들어가는 값이 같으면 나오는 값도 같습니다. 그래서 캐시할 수 있습니다.
+#      st.cache_data 는 실패(예외)는 기억하지 않습니다. 실패했으면 다음에
+#      다시 시도합니다.
+# ---------------------------------------------------------------
+@st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS,
+               max_entries=CACHE_MAX_ENTRIES)
+def cached_calendar(birth_date, calendar_type, leap_month):
+    """양력 ↔ 음력 변환 (같은 날짜면 다시 계산하지 않습니다)."""
+    return compute_calendar_info(birth_date, calendar_type, leap_month)
+
+
+@st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS,
+               max_entries=CACHE_MAX_ENTRIES)
+def cached_saju(birth_date, birth_time, calendar_type, leap_month, birth_place):
+    """사주 네 기둥 · 오행 (같은 출생정보면 다시 계산하지 않습니다)."""
+    return compute_saju(
+        birth_date=birth_date,
+        birth_time=birth_time,
+        calendar_type=calendar_type,
+        leap_month=leap_month,
+        birth_place=birth_place,
+    )
+
+
+@st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS,
+               max_entries=CACHE_MAX_ENTRIES)
+def cached_astro(birth_date, birth_time, birth_place, calendar_type, leap_month):
+    """태양궁·달궁·상승궁. 안에서 좌표(geocoding)와 시간대도 함께 잽니다."""
+    return compute_astrology(
+        birth_date=birth_date,
+        birth_time=birth_time,
+        birth_place=birth_place,
+        calendar_type=calendar_type,
+        leap_month=leap_month,
+    )
+
+
+@st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS,
+               max_entries=CACHE_MAX_ENTRIES)
+def cached_daeun(birth_date, birth_time, calendar_type, leap_month,
+                 birth_place, gender, today):
+    """대운. today 를 함께 받는 이유는 '지금 어느 대운인지'가 날짜에 달려서입니다.
+
+    (날이 바뀌면 지문이 달라져 저절로 다시 계산됩니다)
+    """
+    saju = cached_saju(
+        birth_date, birth_time, calendar_type, leap_month, birth_place
+    )
+    return compute_daeun(saju, gender, today=today)
+
+
+@st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS, max_entries=8)
+def cached_sewoon(today):
+    """올해의 세운. 연도는 코드에서 가져옵니다 (하드코딩하지 않습니다)."""
+    return compute_sewoon(today)
+
+
+# ---------------------------------------------------------------
+#  계산 결과를 Session State 에 담기
+#      계산이 실패해도 앱이 멈추지 않도록, 오류는 문구로만 남깁니다.
+# ---------------------------------------------------------------
+def _birth_args(answers: dict) -> tuple:
+    """계산 함수들이 공통으로 받는 출생정보 묶음."""
+    birth_time = (
+        None if answers.get("출생시간 모름") else answers.get("출생시간")
+    )
+    return (
+        answers.get("생년월일"),
+        birth_time,
+        answers.get("달력 유형", "양력"),
+        answers.get("평달/윤달"),
+        (answers.get("출생지역") or "").strip(),
+    )
 
 
 def compute_calendar(answers: dict) -> None:
@@ -296,12 +489,12 @@ def compute_calendar(answers: dict) -> None:
     """
     st.session_state.calendar_info = None
     st.session_state.calendar_error = None
+    birth_date, _, calendar_type, leap_month, _ = _birth_args(answers)
     try:
-        st.session_state.calendar_info = compute_calendar_info(
-            answers.get("생년월일"),
-            answers.get("달력 유형", "양력"),
-            answers.get("평달/윤달"),
-        )
+        with perf.stage("calendar_conversion", st.session_state.perf):
+            st.session_state.calendar_info = cached_calendar(
+                birth_date, calendar_type, leap_month
+            )
     except CalendarError as exc:
         # 사용자에게는 이 문구만 보여주고, 원인은 개발 로그에 남깁니다.
         log.warning("달력 계산 실패 (안내함) — %s", exc)
@@ -321,18 +514,9 @@ def compute_saju_info(answers: dict) -> None:
     """
     st.session_state.saju_info = None
     st.session_state.saju_error = None
-
-    birth_time = (
-        None if answers.get("출생시간 모름") else answers.get("출생시간")
-    )
     try:
-        st.session_state.saju_info = compute_saju(
-            birth_date=answers.get("생년월일"),
-            birth_time=birth_time,
-            calendar_type=answers.get("달력 유형", "양력"),
-            leap_month=answers.get("평달/윤달"),
-            birth_place=answers.get("출생지역"),
-        )
+        with perf.stage("saju_calculation", st.session_state.perf):
+            st.session_state.saju_info = cached_saju(*_birth_args(answers))
     except CalendarError as exc:
         log.warning("사주 계산 실패 (안내함) — %s", exc)
         st.session_state.saju_error = str(exc)
@@ -347,22 +531,17 @@ def compute_astro_info(answers: dict) -> None:
     """입력값으로 태양궁·달궁·상승궁을 계산해 Session State에 담아둡니다.
 
     출생지역을 좌표로 바꾸려면 인터넷에 한 번 다녀와야 해서 잠깐 걸립니다.
+    (같은 지역이면 두 번째부터는 나가지 않습니다 — astrology.geocode_place)
     실패해도 앱이 멈추지 않도록 오류는 문구로만 남깁니다.
     """
     st.session_state.astro_info = None
     st.session_state.astro_error = None
 
-    birth_time = (
-        None if answers.get("출생시간 모름") else answers.get("출생시간")
-    )
+    birth_date, birth_time, calendar_type, leap_month, place = _birth_args(answers)
     try:
-        with st.spinner("출생지역을 찾아 별의 자리를 재고 있어요..."):
-            st.session_state.astro_info = compute_astrology(
-                birth_date=answers.get("생년월일"),
-                birth_time=birth_time,
-                birth_place=answers.get("출생지역"),
-                calendar_type=answers.get("달력 유형", "양력"),
-                leap_month=answers.get("평달/윤달"),
+        with perf.stage("astrology_calculation", st.session_state.perf):
+            st.session_state.astro_info = cached_astro(
+                birth_date, birth_time, place, calendar_type, leap_month
             )
     except (AstrologyError, CalendarError) as exc:
         # 출생지역을 못 찾은 경우가 여기로 옵니다.
@@ -376,6 +555,105 @@ def compute_astro_info(answers: dict) -> None:
         )
 
 
+def compute_luck_info(answers: dict) -> None:
+    """대운·세운을 계산해 Session State 에 담아둡니다. (파이썬이 계산합니다)
+
+    [반드시 지킬 것]
+        여기서 실패하더라도 Step1~3 은 그대로 살아 있어야 합니다.
+        그래서 오류를 위로 올려보내지 않고 문구로만 남깁니다.
+        (오류 원인은 개발 로그에만 적습니다 — 개인정보는 넣지 않습니다)
+
+    세운은 대운이 실패해도 따로 계산합니다. 둘은 서로 다른 계산입니다.
+    """
+    st.session_state.daeun_info = None
+    st.session_state.daeun_error = None
+    st.session_state.daeun_skipped = False
+    st.session_state.sewoon_info = None
+
+    today = date.today()
+
+    try:
+        with perf.stage("sewoon_calculation", st.session_state.perf):
+            st.session_state.sewoon_info = cached_sewoon(today)
+    except Exception:
+        log.exception("세운 계산 중 예상 못 한 오류")
+
+    birth_date, birth_time, calendar_type, leap_month, place = _birth_args(answers)
+    gender = answers.get("성별")
+
+    if normalize_gender(gender) is None:
+        # 성별을 모르면 대운 방향(순행/역행)을 정할 수 없습니다.
+        # 한쪽으로 찍어서 계산하면 절반의 사람에게 틀린 값을 보여주게 됩니다.
+        #
+        # 이건 '실패'가 아니라 '건너뜀'입니다. 그래서 daeun_error 를 세우지
+        # 않습니다 — 올해의 흐름은 세운만으로 그대로 보여줍니다.
+        # (왜 대운이 없는지는 입력 화면 성별 칸 아래에서 이미 알려주었습니다)
+        log.info("대운 계산 건너뜀 — 성별 미선택 (세운만으로 진행)")
+        st.session_state.daeun_skipped = True
+        return
+
+    try:
+        with perf.stage("daeun_calculation", st.session_state.perf):
+            st.session_state.daeun_info = cached_daeun(
+                birth_date, birth_time, calendar_type, leap_month,
+                place, gender, today,
+            )
+    except DaeunError as exc:
+        log.warning("대운 계산 실패 (안내함) — %s", exc)
+        st.session_state.daeun_error = str(exc)
+    except Exception:
+        log.exception("대운 계산 중 예상 못 한 오류")
+        st.session_state.daeun_error = YEAR_FLOW_ERROR
+
+
+def clear_calculations() -> None:
+    """예전 입력으로 만든 계산값을 통째로 비웁니다.
+
+    입력이 바뀌었을 때만 부릅니다. 옛 사주에 새 별자리가 섞이면 안 되니까요.
+    """
+    for key in (
+        "calendar_info", "calendar_error",
+        "saju_info", "saju_error",
+        "astro_info", "astro_error",
+        "daeun_info", "daeun_error", "sewoon_info",
+        "year_ganji", "year_card_key", "year_card_fingerprint",
+    ):
+        st.session_state[key] = None
+    st.session_state.daeun_skipped = False
+    st.session_state.perf = {}
+
+
+def prepare_calculations(answers: dict) -> None:
+    """할매에게 묻기 전에 필요한 계산을 모두 준비합니다.
+
+    입력이 그대로면 아무것도 다시 계산하지 않습니다.
+    (같은 사람이 '다시 입력하기' 로 돌아와 같은 값을 넣은 경우)
+
+    계산 순서와 로딩 문구가 서로 맞게 붙어 있습니다.
+        ① 사주팔자 → ② 별자리 → ③ 대운
+    """
+    fingerprint = input_fingerprint(answers)
+    same_input = fingerprint == st.session_state.calc_fingerprint
+    already_done = st.session_state.saju_info is not None
+
+    if same_input and already_done:
+        # 지문이 같으면 사주·별자리·대운이 모두 그대로입니다.
+        # (로그에는 지문 값을 적지 않습니다 — 출생정보가 들어 있는 값이라서요)
+        log.info("입력이 그대로라 계산을 다시 하지 않습니다 (세션 재사용)")
+        return
+
+    clear_calculations()
+    st.session_state.calc_fingerprint = fingerprint
+
+    with progress.steps(progress.CALC_STAGES, progress.CALC_DONE) as stage:
+        compute_calendar(answers)
+        compute_saju_info(answers)
+        stage.next()
+        compute_astro_info(answers)
+        stage.next()
+        compute_luck_info(answers)
+
+
 def go_to(page_name: str) -> None:
     """화면을 바꾸고 곧바로 다시 그립니다."""
     st.session_state.page = page_name
@@ -383,7 +661,28 @@ def go_to(page_name: str) -> None:
 
 
 # 고민 분야 선택지
-CONCERN_OPTIONS = ["연애", "취업/커리어", "돈", "인간관계", "삶의 방향", "기타"]
+#     "연애" 를 "연애·관계" 로 넓혔습니다. 솔로만의 이야기가 아니라
+#     사귀는 중·기혼까지 모두 담는 칸이라는 뜻입니다.
+#     (이 칸을 고른 사람에게만 관계 상태를 한 번 더 묻습니다)
+CONCERN_OPTIONS = [
+    RELATIONSHIP_CONCERN, "취업/커리어", "돈", "인간관계", "삶의 방향", "기타",
+]
+
+# 성별 선택칸 밑에 붙는 한 줄 안내.
+#     대운은 성별에 따라 흐르는 방향(순행/역행)이 갈리는 계산이라,
+#     성별을 모르면 계산할 수 없습니다. 그 사실을 입력할 때 미리 알려둡니다.
+#     (결과 화면에서 같은 설명을 길게 되풀이하지 않기 위해서이기도 합니다)
+GENDER_FIELD_NOTE = (
+    "대운은 성별에 따라 흐름의 방향이 달라져, "
+    "성별을 선택한 경우에만 제공해요."
+)
+
+# 관계 상태 선택칸 밑에 붙는 한 줄 안내.
+#     "왜 굳이 묻는지" 와 "안 골라도 된다" 를 함께 알려줍니다.
+RELATIONSHIP_FIELD_NOTE = (
+    "할매가 상황에 맞게 짚어주려고 여쭙는단다. "
+    "고르지 않으면 관계 상태는 넘겨짚지 않아요."
+)
 
 
 def render_model_badge() -> None:
@@ -580,10 +879,17 @@ def render_input() -> None:
     )
 
     # --- 7. 성별 -------------------------------------------------
+    #     선택지는 예전 그대로입니다. 아래 한 줄만 새로 붙였습니다 —
+    #     "왜 성별을 묻는지" 를 미리 알려주면, 나중에 대운이 빠져 있어도
+    #     사용자가 어리둥절하지 않습니다.
     gender = st.radio(
         "성별",
         options=["여성", "남성", "응답하지 않음"],
         key="in_gender",
+    )
+    st.markdown(
+        f'<p class="halmae-fieldnote">{GENDER_FIELD_NOTE}</p>',
+        unsafe_allow_html=True,
     )
 
     # --- 8. 고민 분야 --------------------------------------------
@@ -593,6 +899,28 @@ def render_input() -> None:
         options=CONCERN_OPTIONS,
         key="in_concern",
     )
+
+    # --- 8-2. 관계 상태 (연애·관계를 고른 경우에만) -----------------
+    #     이걸 묻지 않으면 할매가 사용자를 솔로라고 짐작하고
+    #     "소개팅에 나가라" 같은 조언을 합니다. 기혼인 사람에게는
+    #     쓸모없다 못해 무례한 말이 됩니다.
+    #
+    #     [처음에 아무것도 고르지 않은 상태로 둡니다 — index=None]
+    #     첫 항목(솔로·새 인연)이 미리 골라져 있으면, 그냥 지나친 사람이
+    #     솔로로 기록됩니다. 짐작하지 않는 것이 이 기능의 전부라
+    #     비워두고, 비운 채 제출하면 '말하고 싶지 않아요' 로 봅니다.
+    relationship_context = None
+    if concern == RELATIONSHIP_CONCERN:
+        relationship_context = st.radio(
+            RELATIONSHIP_QUESTION,
+            options=RELATIONSHIP_OPTIONS,
+            index=None,
+            key="in_relationship",
+        )
+        st.markdown(
+            f'<p class="halmae-fieldnote">{RELATIONSHIP_FIELD_NOTE}</p>',
+            unsafe_allow_html=True,
+        )
 
     # --- 9. 추가 질문 --------------------------------------------
     extra_question = st.text_area(
@@ -637,17 +965,23 @@ def render_input() -> None:
                 "출생지역": birth_place.strip(),
                 "성별": gender,
                 "고민 분야": concern,
+                # 관계 상태는 '연애·관계' 를 고른 경우에만 담습니다.
+                # 다른 고민으로 바꿔서 제출하면, 아까 골라둔 값이 위젯에
+                # 남아 있더라도 여기 담기지 않습니다.
+                RELATIONSHIP_CONTEXT_KEY: (
+                    (relationship_context or RELATIONSHIP_UNKNOWN)
+                    if concern == RELATIONSHIP_CONCERN else None
+                ),
                 "추가 질문": extra_question.strip(),
             }
             # 입력을 마치고 제출한 순간
             # (answers 를 채운 뒤에 불러야 '고민 분야'가 함께 기록됩니다)
             track_action("input_submit")
 
-            # 생년월일 → 양력·음력 변환, 사주 네 기둥 계산
+            # 생년월일 → 양력·음력 변환, 사주 네 기둥, 별자리, 대운·세운 계산
             # (아직 Gemini에는 보내지 않습니다)
-            compute_calendar(st.session_state.answers)
-            compute_saju_info(st.session_state.answers)
-            compute_astro_info(st.session_state.answers)
+            # 입력이 그대로면 여기서 아무것도 다시 계산하지 않습니다.
+            prepare_calculations(st.session_state.answers)
 
             # 새로 물어보는 것이므로 이전 대화는 비우고 1단계부터 시작합니다.
             reset_conversation()
@@ -909,24 +1243,35 @@ def ensure_reply(step: int, answers: dict) -> None:
     if step in st.session_state.replies or step in st.session_state.errors:
         return
 
-    with st.spinner(LOADING_MESSAGES[step]):
-        try:
-            st.session_state.replies[step] = ask_halmae(
-                step,
-                answers,
-                st.session_state.history,
-                saju=st.session_state.saju_info,
-                astro=st.session_state.astro_info,
-            )
-        except HalmaeError as exc:
-            log.warning("%d단계 답변 실패 (안내함) — %s", step, exc)
-            st.session_state.errors[step] = str(exc)
-        except Exception as exc:          # 예상 못 한 문제로도 앱이 멈추지 않게
-            log.exception("%d단계 답변 중 예상 못 한 오류", step)
-            db.record_failure(f"step{step}", exc)
-            st.session_state.errors[step] = (
-                "알 수 없는 문제가 생겼어요. 잠시 뒤에 다시 시도해주세요."
-            )
+    # 값을 먼저 꺼내둡니다.
+    # 아래 run_staged() 는 Gemini 호출을 딴 갈래(thread)에서 돌리는데,
+    # 그 갈래에서는 st.session_state 에 손대면 안 됩니다.
+    # (Streamlit 은 화면을 그리는 갈래에서만 session_state 를 열어줍니다)
+    history = st.session_state.history
+    saju = st.session_state.saju_info
+    astro = st.session_state.astro_info
+
+    # 스피너 하나를 오래 보여주면 멈춘 줄 압니다. 기다리는 동안 글이 바뀝니다.
+    # (걸린 시간은 개발 로그에만 남고, 화면에는 보이지 않습니다)
+    try:
+        st.session_state.replies[step] = progress.run_staged(
+            lambda: ask_halmae(
+                step, answers, history, saju=saju, astro=astro,
+            ),
+            stages=progress.STEP_STAGES[step],
+            done_label=progress.STEP_DONE,
+            perf_name=f"gemini_step{step}",
+            perf_sink=st.session_state.perf,
+        )
+    except HalmaeError as exc:
+        log.warning("%d단계 답변 실패 (안내함) — %s", step, exc)
+        st.session_state.errors[step] = str(exc)
+    except Exception as exc:              # 예상 못 한 문제로도 앱이 멈추지 않게
+        log.exception("%d단계 답변 중 예상 못 한 오류", step)
+        db.record_failure(f"step{step}", exc)
+        st.session_state.errors[step] = (
+            "알 수 없는 문제가 생겼어요. 잠시 뒤에 다시 시도해주세요."
+        )
 
 
 # ---------------------------------------------------------------
@@ -977,6 +1322,13 @@ def render_step1(answer) -> None:
     _section("할매의 한마디")
     st.markdown(
         f'<div class="halmae-quote">{_escape(answer.closing)}</div>',
+        unsafe_allow_html=True,
+    )
+
+    # 뒤에 '올해의 흐름'이 있다는 예고 — 1단계에서 딱 한 번만 합니다.
+    # (2·3단계에서 되풀이하지 않습니다. 파이썬 고정 문구라 늘 똑같이 나옵니다)
+    st.markdown(
+        f'<p class="halmae-teaser">{_escape(STEP1_YEAR_FLOW_TEASER)}</p>',
         unsafe_allow_html=True,
     )
 
@@ -1059,6 +1411,253 @@ STEP_RENDERERS = {1: render_step1, 2: render_step2, 3: render_step3}
 
 
 # ---------------------------------------------------------------
+#  올해의 흐름 — 대운 × 세운
+#
+#  자리:  Step1 → Step2 → Step3 → [올해의 흐름] → 올해의 카드
+#         Step 번호를 붙이지 않습니다. 1/3·2/3·3/3 구조는 그대로 두고,
+#         그 뒤에 놓이는 별도의 다리(bridge) 구간입니다.
+#
+#  [계산과 해석의 분리]
+#      대운·세운 간지와 연도 구간은 파이썬(daeun.py)이 계산합니다.
+#      화면 위쪽 표에 뜨는 값도 전부 그 계산값입니다.
+#      할매(Gemini)는 그 값을 '해석'만 합니다.
+#
+#  [올해의 카드와의 관계]
+#      여기서 받은 해석은 카드 프롬프트에 넣지 않습니다.
+#      카드는 예전 그대로 계산값만으로 만들어집니다. (정책 변경 없음)
+# ---------------------------------------------------------------
+def ensure_year_flow() -> None:
+    """올해의 흐름 해석을 준비합니다. (이미 있으면 곧바로 돌아섭니다)
+
+    대운 계산이 실패해도 Step1~3 은 그대로 살아 있습니다.
+    여기서는 이 구간에만 안내 문구를 남깁니다.
+    """
+    if st.session_state.year_flow or st.session_state.year_flow_error:
+        return
+
+    sewoon = st.session_state.sewoon_info
+    if not sewoon or not st.session_state.saju_info:
+        log.warning("올해의 흐름 — 세운 또는 사주 계산값이 없습니다")
+        st.session_state.year_flow_error = YEAR_FLOW_ERROR
+        return
+
+    if st.session_state.daeun_error and not st.session_state.daeun_info:
+        # 계산하려다 '실패' 한 경우입니다. 할매를 부르지 않고 이유만 보여줍니다.
+        # (성별 미선택으로 '건너뛴' 경우는 여기 오지 않습니다 — 아래로 갑니다)
+        st.session_state.year_flow_error = st.session_state.daeun_error
+        return
+
+    # 딴 갈래(thread)에서 돌 값이라 미리 꺼내둡니다. (session_state 는 안 봅니다)
+    answers = st.session_state.answers
+    saju = st.session_state.saju_info
+    astro = st.session_state.astro_info
+    daeun = st.session_state.daeun_info
+    history = st.session_state.history
+    # 대운이 없으면 '왜 없는지' 를 함께 실어 보냅니다.
+    # 이유를 적어주지 않으면 모델이 없는 대운을 지어내려 합니다.
+    no_daeun_reason = (
+        GENDER_SKIPPED_FOR_PROMPT
+        if st.session_state.daeun_skipped else None
+    )
+
+    try:
+        st.session_state.year_flow = progress.run_staged(
+            lambda: ask_year_flow(
+                answers, saju, astro, daeun, sewoon, history,
+                no_daeun_reason=no_daeun_reason,
+            ),
+            stages=progress.YEAR_FLOW_STAGES,
+            done_label=progress.YEAR_FLOW_DONE,
+            perf_name="gemini_year_flow",
+            perf_sink=st.session_state.perf,
+        )
+    except HalmaeError as exc:
+        log.warning("올해의 흐름 실패 (안내함) — %s", exc)
+        st.session_state.year_flow_error = str(exc)
+    except Exception as exc:
+        log.exception("올해의 흐름 중 예상 못 한 오류")
+        db.record_failure("year_flow", exc)
+        st.session_state.year_flow_error = YEAR_FLOW_ERROR
+
+
+def _luck_chip(label: str, value: str, sub: str = "") -> str:
+    """대운·세운 값을 보여주는 작은 칸. 값은 전부 파이썬 계산 결과입니다."""
+    sub_html = f'<span class="halmae-luck-sub">{_escape(sub)}</span>' if sub else ""
+    return (
+        '<div class="halmae-luck-cell">'
+        f'<span class="halmae-label">{_escape(label)}</span>'
+        f'<span class="halmae-luck-value">{_escape(value)}</span>'
+        f"{sub_html}"
+        "</div>"
+    )
+
+
+def render_luck_facts() -> None:
+    """대운·세운 계산값 — 파이썬이 낸 값을 그대로 보여줍니다.
+
+    할매의 글에서 간지를 되읽어오지 않습니다. (계산 ≠ 해석)
+
+    [왜 나이보다 연도를 크게 쓰나]
+        대운이 시작되는 나이(대운수)는 절입까지의 거리를 3으로 나눠 반올림한
+        값이라, 경계에 걸리면 만세력에 따라 한 살 차이가 납니다.
+        나이를 크게 써두면 사람들이 그 숫자를 절대값처럼 받아들입니다.
+        그래서 큰 글씨는 '연도 범위', 나이는 아래 작은 글씨로만 둡니다.
+    """
+    daeun = st.session_state.daeun_info
+    sewoon = st.session_state.sewoon_info
+    if not sewoon:
+        return
+
+    cells = []
+    current = (daeun or {}).get("current")
+    if current:
+        # 연도가 주인공입니다. 간지는 바로 아래 작은 글씨로.
+        cells.append(_luck_chip(
+            "지금 대운",
+            f"{current['start_year']} ~ {current['end_year']}",
+            f"{current['pillar']}({current['pillar_hanja']})",
+        ))
+    cells.append(_luck_chip(
+        f"{sewoon['year']} 세운",
+        f"{sewoon['pillar']}({sewoon['pillar_hanja']})",
+        f"{sewoon['animal']}띠",
+    ))
+    if daeun:
+        cells.append(_luck_chip(
+            "흐르는 방향", daeun["direction"], f"월주 {daeun['month_pillar']}에서",
+        ))
+
+    foot = (
+        "대운·세운 간지와 시기는 네 출생정보로 계산한 값이란다. "
+        "할매는 그 값을 풀어줄 뿐이지."
+    )
+    if current:
+        # 나이는 여기까지만 — 보조 정보입니다.
+        foot += (
+            f"<br>이 대운은 만 {current['start_age']}~{current['end_age']}세 "
+            "무렵에 해당한단다. 나이 셈은 만세력마다 한 해쯤 다를 수 있으니, "
+            "연도를 기준으로 보거라."
+        )
+    elif st.session_state.daeun_skipped:
+        # 긴 설명은 입력 화면에서 이미 했습니다. 여기서는 한 줄로만.
+        foot += f"<br>{_escape(GENDER_SKIPPED_NOTE)}"
+
+    _card(
+        f'<div class="halmae-luck-row">{"".join(cells)}</div>'
+        f'<p class="halmae-card-foot">{foot}</p>'
+    )
+
+
+def render_year_flow() -> bool:
+    """Step 3 아래에 붙는 '올해의 흐름' 영역.
+
+    돌려주는 값은 "다음(올해의 카드)으로 넘어가도 되는가" 입니다.
+        True  — 흐름을 다 보여줬거나, 흐름이 실패해 안내를 띄운 뒤
+        False — 아직 버튼만 보여준 상태 (카드는 아직 그리지 않습니다)
+    """
+    # --- 아직 안 눌렀으면 버튼만 보여줍니다 ----------------------
+    if (not st.session_state.year_flow
+            and not st.session_state.year_flow_error
+            and not st.session_state.year_flow_pending):
+        st.markdown(
+            f'<p class="halmae-section">{YEAR_FLOW_TITLE}</p>'
+            '<p class="halmae-body">십 년을 흐르는 대운과 올해 한 해의 세운이 '
+            "어디서 맞물리는지, 그것까지 짚어주마.</p>",
+            unsafe_allow_html=True,
+        )
+        if st.button(YEAR_FLOW_BUTTON, type="primary",
+                     key="year_flow_cta", width="stretch"):
+            track_action("year_flow_click")
+            # 여기서 곧바로 할매를 부르지 않고 표시만 세워둡니다.
+            # 화면을 먼저 다시 그려서 버튼을 치우기 위해서입니다 —
+            # 버튼이 사라지므로 두 번 눌러 같은 요청이 두 번 나갈 수 없습니다.
+            st.session_state.year_flow_pending = True
+            st.rerun()
+        return False
+
+    # --- 누른 직후: 여기서 실제로 할매를 부릅니다 ------------------
+    if st.session_state.year_flow_pending:
+        st.markdown(
+            f'<p class="halmae-section">{YEAR_FLOW_TITLE}</p>',
+            unsafe_allow_html=True,
+        )
+        ensure_year_flow()
+        st.session_state.year_flow_pending = False
+        st.rerun()
+
+    # --- 계산 또는 해석이 실패한 경우 ------------------------------
+    #     Step1~3 은 그대로 살아 있고, 이 구간만 안내로 대신합니다.
+    if st.session_state.year_flow_error:
+        st.markdown(
+            f'<p class="halmae-section">{YEAR_FLOW_TITLE}</p>',
+            unsafe_allow_html=True,
+        )
+        st.warning(st.session_state.year_flow_error)
+        st.caption(
+            "아래 버튼으로 한 번 더 청해보렴. 그래도 안 되면 '다시 입력하기'로 "
+            "출생정보를 확인해주면 된단다."
+        )
+        if st.button("올해 흐름 다시 보기", type="secondary",
+                     key="year_flow_retry", width="stretch"):
+            st.session_state.year_flow_error = None
+            # 대운 자체를 못 낸 경우라면 계산부터 다시 해봅니다.
+            if not st.session_state.daeun_info:
+                compute_luck_info(st.session_state.answers)
+            st.rerun()
+        return True
+
+    # --- 흐름 보여주기 --------------------------------------------
+    flow = st.session_state.year_flow
+    subtitle = (YEAR_FLOW_SUBTITLE if st.session_state.daeun_info
+                else YEAR_FLOW_SUBTITLE_SEWOON)
+    st.markdown(
+        f'<p class="halmae-flow-badge">{_escape(subtitle)}</p>'
+        f'<p class="halmae-step-title">{_escape(YEAR_FLOW_TITLE)}</p>',
+        unsafe_allow_html=True,
+    )
+    # 화면이 다시 그려져도 한 번만 기록합니다. (track 이 세션당 한 번만 남깁니다)
+    track("year_flow_view")
+
+    # 파이썬 계산값 먼저 — 할매의 글보다 위에 둡니다.
+    render_luck_facts()
+
+    st.markdown(f'<p class="halmae-body">{_escape(flow.opening)}</p>',
+                unsafe_allow_html=True)
+
+    # A. 대운 — 계산된 대운이 있을 때만 그립니다.
+    #    성별을 고르지 않은 사람에게는 이 칸을 통째로 생략합니다.
+    #    (왜 없는지는 위 계산값 칸에 한 줄로만 적혀 있습니다.
+    #     같은 설명을 여기서 다시 늘어놓지 않습니다)
+    has_daeun = bool(st.session_state.daeun_info
+                     and flow.daeun_reading.strip())
+    if has_daeun:
+        _section("지금 네가 지나고 있는 대운")
+        _card(f'<p class="halmae-body">{_escape(flow.daeun_reading)}</p>')
+
+    # B. 세운 — 대운이 있든 없든 늘 나옵니다.
+    _section("올해의 세운")
+    _card(f'<p class="halmae-body">{_escape(flow.sewoon_reading)}</p>')
+
+    # C. 만나는 자리 — 대운이 없으면 '올해 세운이 너와 만나는 자리' 입니다.
+    _section("대운과 세운이 만나는 자리" if has_daeun
+             else "올해 흐름이 너와 만나는 자리")
+    _card(
+        '<p class="halmae-label">올해 밀어도 되는 방향</p>'
+        f'<p class="halmae-body">{_escape(flow.push)}</p>'
+        '<p class="halmae-label">올해 조심해야 할 것</p>'
+        f'<p class="halmae-body">{_escape(flow.careful)}</p>'
+        '<p class="halmae-label">네 고민과 이어보면</p>'
+        f'<p class="halmae-body">{_escape(flow.concern_link)}</p>'
+    )
+
+    st.markdown(
+        f'<div class="halmae-quote">{_escape(flow.closing)}</div>',
+        unsafe_allow_html=True,
+    )
+    return True
+
+
+# ---------------------------------------------------------------
 #  올해의 카드
 #
 #  파이썬이 계산한 사주·점성술 값 + 올해 간지(세운)만으로
@@ -1137,45 +1736,54 @@ def ensure_year_card() -> None:
             log.warning("저장된 카드 모양이 맞지 않아 새로 뽑습니다 · key=%s", key[:16])
 
     # --- 3. 없을 때만 Gemini를 부르고, 받은 카드를 저장합니다 -----
-    with st.spinner(YEAR_CARD_LOADING):
-        try:
-            # 1~3단계 대화(history)는 일부러 넘기지 않습니다.
-            # 그 안에는 고민 분야·추가 질문·Step1~3 응답이 들어 있어서,
-            # 넘기면 카드에 "이력서를 고쳐 써라" 같은 고민 전용 행동이 박힙니다.
-            # 카드는 계산이 끝난 값(사주·점성술·올해 간지)만으로 만듭니다.
-            # 인자는 반드시 이름을 붙여 넘깁니다 (keyword argument).
-            # 예전에 순서만 맞춰 넘겼다가, halmae_ai 쪽 인자가 하나 바뀐 뒤
-            # year_notes(list) 가 api_key 자리로 밀려들어가
-            # get_client() 에서 'list' object has no attribute 'strip' 이 났습니다.
-            card = ask_year_card(
+    #     카드 프롬프트로 들어가는 값은 예전과 한 글자도 다르지 않습니다.
+    #     (대운·세운도, 올해의 흐름 답변도, 고민도 넣지 않습니다 — 정책 그대로)
+    try:
+        # 1~3단계 대화(history)는 일부러 넘기지 않습니다.
+        # 그 안에는 고민 분야·추가 질문·Step1~3 응답이 들어 있어서,
+        # 넘기면 카드에 "이력서를 고쳐 써라" 같은 고민 전용 행동이 박힙니다.
+        # 카드는 계산이 끝난 값(사주·점성술·올해 간지)만으로 만듭니다.
+        # 인자는 반드시 이름을 붙여 넘깁니다 (keyword argument).
+        # 예전에 순서만 맞춰 넘겼다가, halmae_ai 쪽 인자가 하나 바뀐 뒤
+        # year_notes(list) 가 api_key 자리로 밀려들어가
+        # get_client() 에서 'list' object has no attribute 'strip' 이 났습니다.
+        astro = st.session_state.astro_info
+        notes = year_luck_notes(saju, year_ganji)
+        card = progress.run_staged(
+            lambda: ask_year_card(
                 saju=saju,
-                astro=st.session_state.astro_info,
+                astro=astro,
                 year_ganji=year_ganji,
-                year_notes=year_luck_notes(saju, year_ganji),
+                year_notes=notes,
+            ),
+            stages=progress.YEAR_CARD_STAGES,
+            done_label=progress.YEAR_CARD_DONE,
+            perf_name="gemini_year_card",
+            perf_sink=st.session_state.perf,
+        )
+        # 카드 글에 이름이 섞여 들어갔으면 여기서 지웁니다.
+        # 화면에 보여줄 카드와 저장할 카드에 똑같이 적용해야
+        # 나중에 다시 열었을 때 같은 카드가 나옵니다.
+        card = YearCard.model_validate(
+            card_store.scrub_card(
+                card.model_dump(), st.session_state.answers.get("이름")
             )
-            # 카드 글에 이름이 섞여 들어갔으면 여기서 지웁니다.
-            # 화면에 보여줄 카드와 저장할 카드에 똑같이 적용해야
-            # 나중에 다시 열었을 때 같은 카드가 나옵니다.
-            card = YearCard.model_validate(
-                card_store.scrub_card(
-                    card.model_dump(), st.session_state.answers.get("이름")
-                )
-            )
-            st.session_state.year_card = card
-            st.session_state.year_card_cached = False
-            # mode="json" — visual_theme 을 enum 이 아니라 글자("clarity")로 남깁니다.
-            # 저장소가 무엇이든(Supabase jsonb · 로컬 파일) 같은 모양으로 들어갑니다.
-            stored = card.model_dump(mode="json")
-            card_store.save_card(key, stored, year, MODEL_LOG_NAME)
-        except HalmaeError as exc:
-            log.warning("올해의 카드 실패 (사용자 안내) — %s", exc)
-            st.session_state.year_card_error = str(exc)
-        except Exception as exc:
-            log.exception("올해의 카드를 만들지 못했습니다")
-            db.record_failure("year_card", exc)
-            st.session_state.year_card_error = (
-                "카드를 뽑는 중 알 수 없는 문제가 생겼어요."
-            )
+        )
+        st.session_state.year_card = card
+        st.session_state.year_card_cached = False
+        # mode="json" — visual_theme 을 enum 이 아니라 글자("clarity")로 남깁니다.
+        # 저장소가 무엇이든(Supabase jsonb · 로컬 파일) 같은 모양으로 들어갑니다.
+        stored = card.model_dump(mode="json")
+        card_store.save_card(key, stored, year, MODEL_LOG_NAME)
+    except HalmaeError as exc:
+        log.warning("올해의 카드 실패 (사용자 안내) — %s", exc)
+        st.session_state.year_card_error = str(exc)
+    except Exception as exc:
+        log.exception("올해의 카드를 만들지 못했습니다")
+        db.record_failure("year_card", exc)
+        st.session_state.year_card_error = (
+            "카드를 뽑는 중 알 수 없는 문제가 생겼어요."
+        )
 
 
 def redraw_year_card() -> None:
@@ -1196,21 +1804,42 @@ def redraw_year_card() -> None:
     st.session_state.year_card_cached = False
 
 
+def year_card_button_label() -> str:
+    """카드 버튼 문구. 연도는 파이썬 계산값에서 가져옵니다 (하드코딩 금지)."""
+    sewoon = st.session_state.sewoon_info
+    if sewoon:
+        return f"{sewoon['year']} 올해의 카드 보기"
+    return "올해의 카드 보기"
+
+
 def render_year_card() -> None:
-    """Step 3 아래에 붙는 '올해의 카드' 영역."""
+    """올해의 흐름 아래에 붙는 '올해의 카드' 영역."""
     # --- 아직 안 뽑았으면 버튼만 보여줍니다 ----------------------
-    if not st.session_state.year_card and not st.session_state.year_card_error:
+    if (not st.session_state.year_card
+            and not st.session_state.year_card_error
+            and not st.session_state.year_card_pending):
         st.markdown(
             '<p class="halmae-section">올해의 카드</p>'
             '<p class="halmae-body">여기까지 들은 이야기를 할매가 한 장으로 '
             "묶어주마. 올해 네가 붙들고 갈 딱 한 가지란다.</p>",
             unsafe_allow_html=True,
         )
-        if st.button("올해의 카드 받기", type="primary", key="year_card_cta", width="stretch"):
+        if st.button(year_card_button_label(), type="primary",
+                     key="year_card_cta", width="stretch"):
             track_action("card_click")
-            ensure_year_card()
+            # 표시만 세우고 화면을 먼저 다시 그립니다 — 버튼이 사라지므로
+            # 두 번 눌러 같은 요청이 두 번 나갈 수 없습니다.
+            st.session_state.year_card_pending = True
             st.rerun()
         return
+
+    # --- 누른 직후: 여기서 실제로 카드를 준비합니다 ----------------
+    if st.session_state.year_card_pending:
+        st.markdown('<p class="halmae-section">올해의 카드</p>',
+                    unsafe_allow_html=True)
+        ensure_year_card()
+        st.session_state.year_card_pending = False
+        st.rerun()
 
     if st.session_state.year_card_error:
         st.warning(st.session_state.year_card_error)
@@ -1545,7 +2174,12 @@ def render_result() -> None:
         # 3단계(행동 지령)를 끝까지 보여준 뒤에만
         # 올해의 카드 → Premium 순서로 답니다.
         if step == 3:
-            render_year_card()
+            # Step3 → 올해의 흐름 → 올해의 카드 순서입니다.
+            # 흐름을 아직 안 눌렀으면 카드는 그리지 않습니다.
+            # (흐름이 실패했을 때는 True 를 돌려줘서 카드까지 막지 않습니다)
+            if render_year_flow():
+                st.markdown(theme.separator(), unsafe_allow_html=True)
+                render_year_card()
             st.markdown(theme.separator(), unsafe_allow_html=True)
             render_feedback()
             st.markdown(theme.separator(), unsafe_allow_html=True)
@@ -1581,6 +2215,31 @@ def render_result() -> None:
                     language="text",
                 )
 
+            # --- 대운 · 세운 (파이썬 계산값) ------------------------
+            if st.session_state.sewoon_info:
+                st.caption("대운 · 세운 — 파이썬이 계산한 값 (Gemini 아님)")
+                st.code(
+                    describe_luck(
+                        st.session_state.daeun_info,
+                        st.session_state.sewoon_info,
+                    ),
+                    language="text",
+                )
+                if st.session_state.daeun_error:
+                    st.caption(f"대운 계산 안 됨 · {st.session_state.daeun_error}")
+                if st.session_state.daeun_info:
+                    st.caption("올해의 흐름 프롬프트 (대운·세운이 확정값으로 들어갑니다)")
+                    st.code(
+                        build_year_flow_prompt(
+                            answers,
+                            st.session_state.saju_info,
+                            st.session_state.astro_info,
+                            st.session_state.daeun_info,
+                            st.session_state.sewoon_info,
+                        ),
+                        language="text",
+                    )
+
             st.caption("Gemini가 돌려준 구조화 데이터")
             for step in range(1, st.session_state.step + 1):
                 reply = st.session_state.replies.get(step)
@@ -1588,6 +2247,22 @@ def render_result() -> None:
                     continue
                 st.caption(f"{step}단계 · {answer_length(reply)}자")
                 st.json(reply.model_dump())
+            if st.session_state.year_flow:
+                st.caption(
+                    "올해의 흐름 · "
+                    f"{answer_length(st.session_state.year_flow)}자"
+                )
+                st.json(st.session_state.year_flow.model_dump())
+
+        # --- 개발자용: 어느 구간이 오래 걸렸나 ----------------------
+        #     사용자에게는 절대 보여주지 않습니다 (USE_DEV_MODE 안쪽).
+        #     같은 내용이 개발 로그에도 [PERF] 로 한 줄씩 남아 있습니다.
+        with st.expander("개발자용 · 처리시간 보기"):
+            st.caption(
+                "이 세션에서 실제로 걸린 시간입니다. "
+                "터미널에서는 `[PERF]` 로 검색하면 더 잘게 나온 값도 볼 수 있어요."
+            )
+            st.code(perf.format_summary(st.session_state.perf), language="text")
 
     st.markdown("<div style='height: 1rem;'></div>", unsafe_allow_html=True)
 
@@ -1712,6 +2387,32 @@ def render_dev_funnel() -> None:
 
         st.markdown("**터미널에서 보던 그대로**")
         st.code(analytics.format_funnel_text(summary), language="text")
+
+    # --- 올해의 흐름 지표 (대운 × 세운) --------------------------
+    st.markdown(theme.rule(), unsafe_allow_html=True)
+    st.markdown("### 🌗 올해의 흐름 · 대운 × 세운")
+    st.caption(
+        "Step 3 과 올해의 카드 사이에 놓인 다리 구간입니다. "
+        "깔때기 본줄은 예전 그대로 두고 따로 셉니다."
+    )
+
+    flow_stats = analytics.year_flow_summary(events)
+    flow_counts = flow_stats["counts"]
+    flow_cols = st.columns(4)
+    flow_cols[0].metric("Step 3 조회자", flow_counts["step3_view"])
+    flow_cols[1].metric("흐름 보기 클릭", flow_counts["year_flow_click"])
+    flow_cols[2].metric(
+        "흐름 클릭률",
+        "-" if flow_stats["흐름 클릭률"] is None
+        else f"{flow_stats['흐름 클릭률']}%",
+        help="year_flow_click ÷ step3_view",
+    )
+    flow_cols[3].metric(
+        "흐름 완료율",
+        "-" if flow_stats["흐름 완료율"] is None
+        else f"{flow_stats['흐름 완료율']}%",
+        help="year_flow_view ÷ year_flow_click · 낮으면 흐름 생성이 실패 중",
+    )
 
     # --- 올해의 카드 지표 ---------------------------------------
     st.markdown(theme.rule(), unsafe_allow_html=True)

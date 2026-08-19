@@ -314,9 +314,13 @@ def verify_app_call_site() -> None:
           "history" not in code)
     check("ensure_year_card() 코드가 고민 분야·추가 질문을 읽지 않는다",
           "고민 분야" not in code and "추가 질문" not in code)
+    # astro 는 변수로 한 번 받아서 넘깁니다.
+    # 카드 생성은 딴 갈래(thread)에서 도는데, 그 갈래에서는 st.session_state 를
+    # 열 수 없어서 미리 꺼내둬야 하기 때문입니다. (값은 그대로입니다)
     check("ask_year_card 에 saju 와 astro 를 넘긴다",
           "saju=saju," in code
-          and "astro=st.session_state.astro_info," in code)
+          and "astro=astro," in code
+          and "astro = st.session_state.astro_info" in code)
 
     # 인자 이름을 붙여 넘기는지 (positional 로 넘기면 halmae_ai 쪽 인자가
     # 하나만 바뀌어도 year_notes 가 api_key 자리로 밀려 들어갑니다)

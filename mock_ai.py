@@ -24,6 +24,7 @@ from halmae_ai import (
     Step2Answer,
     Step3Answer,
     YearCard,
+    YearFlowAnswer,
 )
 
 MOCK_DELAY_SECONDS = 0.4     # 로딩 화면이 보이는지 확인할 수 있게 아주 잠깐만 쉽니다
@@ -34,9 +35,14 @@ MOCK_DELAY_SECONDS = 0.4     # 로딩 화면이 보이는지 확인할 수 있�
 #     계산이 안 된 경우에도 화면이 깨지지 않도록 기본값을 둡니다.
 # ===============================================================
 def _facts(answers: dict | None, saju: dict | None, astro: dict | None) -> dict:
+    from halmae_ai import relationship_context
+
     answers = answers or {}
     name = answers.get("이름") or "너"
     concern = answers.get("고민 분야") or "지금의 고민"
+    # 관계 상태 — '연애·관계' 를 고른 사람에게만 값이 있습니다.
+    # Mock 에서도 이 값을 실제로 써야, 개발 중에 화면이 진짜와 달라지지 않습니다.
+    relationship = relationship_context(answers)
 
     if saju:
         pillars = saju["기둥"]
@@ -72,7 +78,13 @@ def _facts(answers: dict | None, saju: dict | None, astro: dict | None) -> dict:
     else:
         return_astro = {"sun": "Aries", "moon": "Pisces", "rising": "Gemini"}
 
-    return {"이름": name, "고민": concern, **return_saju, **return_astro}
+    return {
+        "이름": name,
+        "고민": concern,
+        "관계": relationship,
+        **return_saju,
+        **return_astro,
+    }
 
 
 # ===============================================================
@@ -118,7 +130,10 @@ def mock_step1(answers=None, saju=None, astro=None) -> Step1Answer:
             ),
         ],
         concern_reading=(
-            f"{f['이름']}아, 네 {f['고민']}이 지금 삐걱대는 건 네가 게을러서가 아니란다. "
+            (f"네가 고른 관계 상태({f['관계']})에 맞춰 짚어주마. "
+             if f["관계"] else "")
+            + f"{f['이름']}아, 네 {f['고민']}이 지금 삐걱대는 건 "
+            "네가 게을러서가 아니란다. "
             "네 사주는 짊어지고 버티는 데 최적화되어 있는데, 네 별자리는 "
             "판을 갈아엎고 싶어 등을 떠밀고 있지. 이 둘이 정면으로 부딪히는 자리가 "
             "바로 지금이란다.\n\n"
@@ -394,6 +409,102 @@ def mock_step3(answers=None, saju=None, astro=None) -> Step3Answer:
             "세 가지를 한꺼번에 하려 들지 말거라. 첫째를 이번 주말에 끝내고, "
             "둘째를 다음 기회에 한 번 시험해보면 그것만으로 충분하다. "
             "네 성정에는 크게 뒤집는 것보다 한 칸씩 밀고 나가는 쪽이 맞는단다."
+        ),
+    )
+
+
+# ===============================================================
+#  올해의 흐름 (대운 × 세운)
+#
+#  대운·세운 값은 여기서도 지어내지 않습니다.
+#  파이썬(daeun.py)이 계산해 넘겨준 값을 글에 그대로 끼워 넣습니다.
+#  (Mock 이라고 값을 만들어 쓰면, 화면에서 진짜와 다른 모양이 나옵니다)
+# ===============================================================
+def mock_year_flow(
+    answers: dict | None = None,
+    saju: dict | None = None,
+    daeun: dict | None = None,
+    sewoon: dict | None = None,
+) -> YearFlowAnswer:
+    """개발용 예시 '올해의 흐름'. (※ 내용은 화면 확인용 예시입니다)"""
+    facts = _facts(answers, saju, None)
+    concern = (answers or {}).get("고민 분야") or "삶의 방향"
+
+    current = (daeun or {}).get("current")
+    year = (sewoon or {}).get("year", "올해")
+    sewoon_text = (sewoon or {}).get("pillar", "(세운 계산 없음)")
+
+    # 대운이 없으면(성별 미선택) A 파트를 비웁니다 — 실제 응답과 같은 모양입니다.
+    if not current:
+        return YearFlowAnswer(
+            opening=(
+                "여기까지 잘 따라왔구나. 이번엔 올해 한 해의 기운만 짚어주마."
+            ),
+            daeun_reading="",
+            sewoon_reading=(
+                f"{year}년 세운은 {sewoon_text}란다. 세운은 그 해 하나에만 부는 "
+                "바람이라, 명리에서는 세운의 기운이 원국에 이미 많은 것과 겹치면 "
+                f"과해지고, 없던 것과 만나면 새 문이 열린다고 해석한단다. "
+                f"네 일간은 {facts['일간']}이고 {facts['오행요약']} 로 기운이 "
+                "놓여 있으니, 올해는 평소 쓰지 않던 근육을 쓰게 되는 해로 본다. "
+                "(※ 개발용 예시 데이터)"
+            ),
+            push=(
+                "미뤄둔 결정 하나를 올해 안에 매듭짓는 쪽으로는 밀어도 좋다."
+            ),
+            careful=(
+                "기운이 들어온다고 여러 가지를 한꺼번에 벌이는 버릇을 조심하거라."
+            ),
+            concern_link=(
+                f"네가 물은 {concern} 이야기로 옮겨보면, 올해 흐름은 "
+                "'고르는 힘'이 세지는 쪽이란다. 명리 해석이니 무슨 일이 반드시 "
+                "일어난다는 말은 아니고, 고를 자리가 늘어난다는 뜻으로 새기거라."
+            ),
+            closing=(
+                "올해 기운은 이러하다. 이제 올해를 한 장으로 묶은 카드를 "
+                "보러 가자꾸나."
+            ),
+        )
+
+    daeun_text = current["pillar"]
+    period_text = f"{current['start_year']}년부터 {current['end_year']}년까지"
+
+    return YearFlowAnswer(
+        opening=(
+            "여기까지 잘 따라왔구나. 이제 네 큰 흐름을 짚어주마. "
+            "십 년 단위로 흐르는 대운과 한 해짜리 세운을 나란히 놓고 보는 것이다."
+        ),
+        daeun_reading=(
+            f"지금 너는 {daeun_text} 대운을 지나고 있단다. {period_text}가 "
+            "이 기운이 네 삶의 바탕에 깔리는 시기지. 명리에서는 대운을 "
+            "'십 년 동안 네가 서 있는 땅'으로 보는데, 땅이 바뀌면 같은 성정도 "
+            f"다르게 자란다고 해석한단다. 네 일간은 {facts['일간']}이고 "
+            f"{facts['오행요약']} 로 기운이 놓여 있으니, 이 대운은 네 안에서 "
+            "이미 강한 쪽을 더 밀어주는 자리라기보다 비어 있던 자리를 채워주는 "
+            "쪽에 가깝다고 본다. (※ 개발용 예시 데이터)"
+        ),
+        sewoon_reading=(
+            f"{year}년 세운은 {sewoon_text}란다. 세운은 그 해 하나에만 부는 "
+            "바람이라, 대운이라는 땅 위에 어떤 날씨가 오는지로 보면 쉽다. "
+            "명리에서는 세운의 기운이 원국에 이미 많은 것과 겹치면 과해지고, "
+            "없던 것과 만나면 새 문이 열린다고 해석한단다. "
+            "올해는 네가 평소 쓰지 않던 근육을 쓰게 되는 해로 본다."
+        ),
+        push=(
+            "미뤄둔 결정 하나를 올해 안에 매듭짓는 쪽으로는 밀어도 좋다. "
+            "대운과 세운이 같은 방향을 가리키는 자리가 거기다."
+        ),
+        careful=(
+            "기운이 들어온다고 여러 가지를 한꺼번에 벌이는 버릇을 조심하거라. "
+            "올해는 넓히는 해가 아니라 하나를 끝까지 밀어보는 해로 본다."
+        ),
+        concern_link=(
+            f"네가 물은 {concern} 이야기로 옮겨보면, 올해 흐름은 '고르는 힘'이 "
+            "세지는 쪽이란다. 명리 해석이니 무슨 일이 반드시 일어난다는 말은 "
+            "아니고, 네가 고를 자리가 늘어난다는 뜻으로 새기거라."
+        ),
+        closing=(
+            "큰 흐름은 이러하다. 이제 올해를 한 장으로 묶은 카드를 보러 가자꾸나."
         ),
     )
 

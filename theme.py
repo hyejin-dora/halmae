@@ -588,6 +588,35 @@ def _css_controls(t: dict) -> str:
         font-size: 0.78rem !important;
         line-height: 1.75;
     }}
+
+    /* ===== 입력칸 밑에 붙는 짧은 도움말 ============================
+       "이 값을 왜 묻는지" 를 한 줄로 알려주는 자리입니다.
+
+       [경고처럼 보이지 않게]
+           테두리도 배경도 색 대비도 주지 않습니다. 작은 금색 점 하나만
+           앞에 두어 '안내' 라는 것만 표시합니다.
+           동의문(.halmae-notice)처럼 상자를 두르면 무거워 보입니다.
+
+       [모바일에서 줄바꿈]
+           word-break: keep-all 로 한국어 낱말 가운데가 끊기지 않게 합니다.
+           (기본값은 아무 데서나 끊어서 "성별을 선택한 경 / 우에만" 처럼 됩니다) */
+    .halmae-fieldnote {{
+        font-size: 0.78rem;
+        line-height: 1.75;
+        color: {t['ivory_low']};
+        margin: 0.15rem 0 0.9rem 0;
+        padding-left: 0.75rem;
+        position: relative;
+        word-break: keep-all;
+        overflow-wrap: break-word;
+    }}
+    .halmae-fieldnote::before {{
+        content: "·";
+        position: absolute;
+        left: 0;
+        color: {t['gold']};
+        font-weight: 700;
+    }}
     div[data-testid="stAlert"] {{
         background: {t['bg_raised']};
         border: 1px solid {t['line_gold']};
@@ -808,6 +837,96 @@ def _css_result(t: dict) -> str:
             transparent, {t['line_gold']} 35%,
             {t['royal_red_line']} 50%, {t['line_gold']} 65%, transparent);
         margin: 2rem 0;
+    }}
+
+    /* ===== 1단계 끝의 예고 한 줄 ===================================
+       "뒤에 올해의 흐름이 더 있다" 고 알려주는 자리입니다.
+       본문보다 한 톤 낮추고 왼쪽에 금선을 세워, 답변이 아니라 '안내'로
+       읽히게 했습니다. */
+    .halmae-teaser {{
+        font-size: 0.9rem;
+        line-height: 1.9;
+        color: {t['ivory_mid']};
+        border-left: 2px solid {t['line_gold']};
+        padding: 0.15rem 0 0.15rem 0.85rem;
+        margin: 1.1rem 0 0.2rem 0;
+    }}
+
+    /* ===== 올해의 흐름 · 대운 × 세운 ===============================
+       Step 1~3 과 헷갈리지 않게 번호(1/3) 대신 '대운 × 세운' 을 얹습니다.
+       색과 서체는 단계 배지와 같은 것을 씁니다 — 같은 이야기의 마지막 장이니까요. */
+    .halmae-flow-badge {{
+        text-align: center;
+        font-family: {t['font_latin']};
+        font-size: 0.8rem;
+        letter-spacing: 0.35em;
+        text-indent: 0.35em;
+        color: {t['gold']};
+        margin: 2rem 0 0.4rem 0;
+    }}
+
+    /* 대운·세운 값 칸 — 파이썬 계산값을 그대로 보여주는 자리
+       (명식 칸과 같은 모양을 씁니다. 둘 다 '계산 결과' 라는 뜻입니다) */
+    .halmae-luck-row {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin: 0.2rem 0 0.6rem 0;
+    }}
+    .halmae-luck-cell {{
+        flex: 1 1 6.5rem;
+        min-width: 6.5rem;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.15rem;
+        background: {t['bg_deep']};
+        border: 1px solid {t['line_gold']};
+        border-radius: {t['radius_card']};
+        padding: 0.55rem 0.35rem;
+    }}
+    .halmae-luck-cell .halmae-label {{
+        margin: 0;
+    }}
+    .halmae-luck-value {{
+        font-family: {t['font_title']};
+        font-size: 1.05rem;
+        font-weight: 700;
+        color: {t['gold_bright']};
+        line-height: 1.4;
+        word-break: keep-all;
+        overflow-wrap: anywhere;
+    }}
+    .halmae-luck-sub {{
+        font-family: {t['font_latin']};
+        font-size: 0.7rem;
+        letter-spacing: 0.06em;
+        color: {t['ivory_mid']};
+    }}
+
+    /* ===== 로딩 상태(st.status) — 기다리는 동안 보이는 유일한 화면 ==
+       Streamlit 기본 상자는 흰 배경이라 화면에서 혼자 떠 보입니다.
+       테두리와 배경만 이 앱의 것으로 바꾸고, 스피너는 그대로 둡니다. */
+    div[data-testid="stExpander"]:has(div[data-testid="stStatusWidget"]),
+    details[data-testid="stExpander"] {{
+        border-radius: {t['radius_card']};
+    }}
+    div[data-testid="stStatus"] {{
+        background: linear-gradient(180deg,
+            {t['bg_panel']} 0%, {t['bg_raised']} 100%);
+        border: 1px solid {t['line_gold']};
+        border-radius: {t['radius_card']};
+    }}
+    div[data-testid="stStatus"] summary,
+    div[data-testid="stStatus"] label,
+    div[data-testid="stStatus"] p {{
+        font-family: {t['font_title']};
+        font-size: 0.95rem;
+        color: {t['gold_bright']};
+    }}
+    div[data-testid="stStatus"] svg {{
+        fill: {t['gold']};
+        color: {t['gold']};
     }}
     """
 
@@ -1542,6 +1661,17 @@ def _css_mobile(t: dict) -> str:
         }}
         .halmae-myeongsik-value {{ font-size: 0.92rem; }}
 
+        /* 대운·세운 칸 — 세 칸이 나란히 서면 좁으므로 두 칸씩 접힙니다.
+           (min-width 를 화면 절반보다 조금 작게 잡아 두 칸이 들어가게) */
+        .halmae-luck-cell {{
+            flex: 1 1 5.4rem;
+            min-width: 5.4rem;
+            padding: 0.5rem 0.25rem;
+        }}
+        .halmae-luck-value {{ font-size: 0.94rem; }}
+        .halmae-luck-sub {{ font-size: 0.66rem; }}
+        .halmae-teaser {{ font-size: 0.86rem; padding-left: 0.7rem; }}
+
         /* 올해의 카드 — 좁은 화면에서도 세로형 비율을 지킵니다.
            폭은 max-width 라 화면을 넘지 않고, 그림 칸 높이만 줄입니다.
            그림이 카드의 주인공이라, 줄이는 순서는 여백 → 글자 → 그림입니다. */
@@ -1573,6 +1703,9 @@ def _css_mobile(t: dict) -> str:
         .halmae-yearcard-mood {{ font-size: 0.52rem; }}
         .halmae-yearcard-plate {{ padding: 0.9rem 0.5rem 0.35rem 0.5rem; }}
         .halmae-myeongsik-value {{ font-size: 0.86rem; }}
+        .halmae-luck-value {{ font-size: 0.88rem; }}
+        .halmae-luck-cell {{ flex: 1 1 4.6rem; min-width: 4.6rem; }}
+        .halmae-fieldnote {{ font-size: 0.74rem; }}
     }}
 
     /* 세로가 짧은 기기 (구형 아이폰 가로 · 작은 안드로이드)

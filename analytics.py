@@ -51,6 +51,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import db
+import perf
 from config import get_secret
 
 # 저장하는 칸은 이 여섯 개가 전부입니다. (개인정보가 섞여 들어가지 못하게 하는 울타리)
@@ -77,8 +78,21 @@ INTENT_STEPS = [
     ("purchase_intent_no", "구매 의향 No"),
 ]
 
+# 올해의 흐름(대운 × 세운)은 Step 3 다음에 붙는 다리(bridge) 구간입니다.
+# Step 번호를 붙이지 않으므로 깔때기 본줄과 따로 셉니다.
+YEAR_FLOW_STEPS = [
+    ("year_flow_click", "올해의 흐름 보기 클릭"),
+    ("year_flow_view", "올해의 흐름 조회"),
+]
+
 # 올해의 카드는 Step 3 화면에서 Premium 과 나란히 보이는 '곁가지'입니다.
 # 깔때기 중간에 끼워 넣으면 Premium 전환율이 이상해져서 따로 셉니다.
+#
+# [이름을 바꾸지 않은 이유]
+#     카드 클릭 이벤트는 처음부터 card_click 이라는 이름으로 쌓여 있습니다.
+#     year_card_click 이라는 이름을 새로 만들면 같은 행동이 두 이름으로
+#     갈라져, 예전 기록과 새 기록을 함께 셀 수 없게 됩니다.
+#     그래서 카드 클릭은 계속 card_click 하나만 씁니다.
 CARD_STEPS = [
     ("card_click", "올해의 카드 받기 클릭"),
     ("card_view", "올해의 카드 조회"),
@@ -93,7 +107,10 @@ FEEDBACK_STEPS = [
 
 EVENT_NAMES = [
     name
-    for name, _ in FUNNEL_STEPS + INTENT_STEPS + CARD_STEPS + FEEDBACK_STEPS
+    for name, _ in (
+        FUNNEL_STEPS + INTENT_STEPS + YEAR_FLOW_STEPS
+        + CARD_STEPS + FEEDBACK_STEPS
+    )
 ]
 
 DEFAULT_FEEDBACK_PATH = Path(__file__).parent / "data" / "feedback.csv"
@@ -232,7 +249,12 @@ class SupabaseEventStore(EventStore):
             self._to_fallback(row)
             return
         try:
-            client.table(db.EVENTS_TABLE).insert(self._to_supabase(row)).execute()
+            # 이벤트 한 줄을 넣는 동안 화면이 멈춰 있으므로, 얼마나 걸리는지
+            # 개발 로그에 남깁니다. (개인정보는 원래부터 이 줄에 없습니다)
+            with perf.stage("supabase_write"):
+                client.table(db.EVENTS_TABLE).insert(
+                    self._to_supabase(row)
+                ).execute()
         except Exception as exc:
             db.record_failure("events insert", exc, row.get("event_name", ""))
             self._to_fallback(row)
@@ -244,18 +266,19 @@ class SupabaseEventStore(EventStore):
         try:
             rows: list[dict] = []
             start = 0
-            while True:                        # 1000줄씩 끝까지 읽어옵니다
-                page = (
-                    client.table(db.EVENTS_TABLE)
-                    .select("*")
-                    .order("created_at")
-                    .range(start, start + PAGE_SIZE - 1)
-                    .execute()
-                ).data or []
-                rows.extend(page)
-                if len(page) < PAGE_SIZE:
-                    break
-                start += PAGE_SIZE
+            with perf.stage("supabase_read"):
+                while True:                    # 1000줄씩 끝까지 읽어옵니다
+                    page = (
+                        client.table(db.EVENTS_TABLE)
+                        .select("*")
+                        .order("created_at")
+                        .range(start, start + PAGE_SIZE - 1)
+                        .execute()
+                    ).data or []
+                    rows.extend(page)
+                    if len(page) < PAGE_SIZE:
+                        break
+                    start += PAGE_SIZE
             return [self._from_supabase(r) for r in rows]
         except Exception as exc:
             db.record_failure("events select", exc)
@@ -762,6 +785,54 @@ def format_card_text(summary: dict | None = None) -> str:
     return "\n".join(lines)
 
 
+def year_flow_summary(store: EventStore | None = None) -> dict:
+    """올해의 흐름(대운 × 세운) 지표.
+
+    Step 3 → 올해의 흐름 → 올해의 카드 로 이어지는 다리 구간이 실제로
+    건너지고 있는지 봅니다. 깔때기 본줄(funnel_summary)은 건드리지 않습니다.
+    """
+    rows = (store or _store).read_all()
+
+    wanted = ["step3_view", "year_flow_click", "year_flow_view", "card_click"]
+    sessions: dict[str, set] = {name: set() for name in wanted}
+    for row in rows:
+        session_id = (row.get("session_id") or "").strip()
+        event_name = (row.get("event_name") or "").strip()
+        if session_id and event_name in sessions:
+            sessions[event_name].add(session_id)
+
+    counts = {name: len(sessions[name]) for name in wanted}
+    return {
+        "counts": counts,
+        # Step 3 까지 온 사람 중 몇 %가 흐름 버튼을 눌렀나
+        "흐름 클릭률": _rate(counts["year_flow_click"], counts["step3_view"]),
+        # 누른 사람 중 몇 %가 실제로 흐름을 봤나 (실패하면 낮아집니다)
+        "흐름 완료율": _rate(counts["year_flow_view"], counts["year_flow_click"]),
+        # 흐름을 본 사람 중 몇 %가 카드로 넘어갔나
+        "카드로 이어진 비율": _rate(counts["card_click"], counts["year_flow_view"]),
+    }
+
+
+def format_year_flow_text(summary: dict | None = None) -> str:
+    """올해의 흐름 지표를 터미널용 글로."""
+    summary = summary or year_flow_summary()
+    counts = summary["counts"]
+    lines = [
+        f"{'Step 3 조회자':<22} {counts['step3_view']:>4}",
+        f"{'올해의 흐름 클릭':<22} {counts['year_flow_click']:>4}",
+        f"{'올해의 흐름 조회':<22} {counts['year_flow_view']:>4}",
+        f"{'이어서 카드 클릭':<22} {counts['card_click']:>4}",
+        "",
+    ]
+    for label in ("흐름 클릭률", "흐름 완료율", "카드로 이어진 비율"):
+        value = summary[label]
+        lines.append(
+            f"{label:<22} "
+            f"{'계산 불가 (아직 표본 없음)' if value is None else f'{value:>5.1f}%'}"
+        )
+    return "\n".join(lines)
+
+
 def feedback_summary(
     store: EventStore | None = None,
     feedback_store: FeedbackStore | None = None,
@@ -921,6 +992,10 @@ if __name__ == "__main__":
                   f"(마지막: {db.failures()[-1]['error']})")
         print()
         print(format_funnel_text())
+        print()
+        print("[올해의 흐름 · 대운 × 세운]")
+        print()
+        print(format_year_flow_text())
         print()
         print("[올해의 카드]")
         print()

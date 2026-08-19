@@ -64,6 +64,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import db
+import perf
 
 DEFAULT_JSON_PATH = Path(__file__).parent / "data" / "cards.json"
 
@@ -506,9 +507,14 @@ def get_store() -> CardStore:
 #  3. 바깥에서 쓰는 함수
 # ===============================================================
 def load_card(key: str) -> dict | None:
-    """이미 만들어둔 카드를 꺼냅니다. 없으면 None."""
+    """이미 만들어둔 카드를 꺼냅니다. 없으면 None.
+
+    저장된 카드를 찾으면 Gemini 를 부르지 않으므로, 이 조회가 빠른지는
+    카드 화면 체감 속도를 좌우합니다. 걸린 시간을 개발 로그에 남깁니다.
+    """
     try:
-        return _store.get(key)
+        with perf.stage("year_card_lookup"):
+            return _store.get(key)
     except Exception:
         return None      # 저장소 문제로 앱이 멈추면 안 됩니다
 
@@ -516,7 +522,8 @@ def load_card(key: str) -> dict | None:
 def save_card(key: str, card: dict, year: int, model: str) -> None:
     """새로 만든 카드를 저장해둡니다."""
     try:
-        _store.put(key, card, year, model)
+        with perf.stage("supabase_write"):
+            _store.put(key, card, year, model)
     except Exception:
         pass
 

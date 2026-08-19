@@ -31,6 +31,8 @@ from geopy.exc import GeocoderServiceError, GeocoderTimedOut, GeocoderUnavailabl
 from geopy.geocoders import Nominatim
 from timezonefinder import TimezoneFinder
 
+import perf
+
 from saju import compute_calendar_info
 
 # 개발 로그 — 사용자에게는 짧은 안내만 보여주고, 진짜 원인은 여기 남깁니다.
@@ -92,7 +94,10 @@ def geocode_place(place: str) -> dict:
 
     geolocator = Nominatim(user_agent=USER_AGENT, timeout=10)
     try:
-        location = geolocator.geocode(query, language="ko")
+        # 인터넷에 한 번 다녀오는 구간이라 여기가 느려질 때가 많습니다.
+        # 얼마나 걸렸는지 개발 로그에 남깁니다. (검색어는 남기지 않습니다)
+        with perf.stage("geocoding"):
+            location = geolocator.geocode(query, language="ko")
     except (GeocoderTimedOut, GeocoderUnavailable, GeocoderServiceError) as exc:
         raise AstrologyError(
             "출생지역을 찾는 중 인터넷 연결에 문제가 생겼어요. "
@@ -123,7 +128,10 @@ def _timezone_finder() -> TimezoneFinder:
 
 def find_timezone(latitude: float, longitude: float) -> str:
     """좌표가 속한 시간대 이름. 예) 37.5665, 126.978 → 'Asia/Seoul'"""
-    name = _timezone_finder().timezone_at(lat=latitude, lng=longitude)
+    # TimezoneFinder 를 처음 만들 때 자료를 읽느라 몇 초가 걸릴 수 있습니다.
+    # (두 번째부터는 lru_cache 덕분에 바로 나옵니다)
+    with perf.stage("timezone"):
+        name = _timezone_finder().timezone_at(lat=latitude, lng=longitude)
     if not name:
         raise AstrologyError(
             "출생지역의 시간대를 알아내지 못했어요. "

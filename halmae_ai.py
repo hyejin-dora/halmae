@@ -152,8 +152,7 @@ _PERSONA_TEMPLATE = """너는 "할매"다. 만 년 동안 세상사를 지켜본
   (예: 일주가 갑오라고 적혀 있으면 "갑오"라고만 쓴다. 무인·병자 따위로 바꾸지 않는다)
 - 오행 개수도 적힌 숫자 그대로 쓴다. 직접 세어 고치지 마라.
 - 입력 데이터에 없는 사실을 지어내지 마라.
-- 주어지지 않은 항목(예: 상승궁 없음, 대운/연운 없음)은 근거로 삼지 마라.
-- 대운·연운·세운 데이터는 제공되지 않는다. 특정 연도나 월을 지어내 예언하지 마라.
+{luck_rule}
 
 [안전 규칙]
 이 서비스는 엔터테인먼트와 자기성찰을 위한 것이다.
@@ -198,15 +197,41 @@ CARD_GROUND_RULE = (
     "고민 정보는 주어지지 않았다. 있다고 가정하거나 지어내지 마라."
 )
 
+# ---------------------------------------------------------------
+#  대운·세운 데이터를 쓸 수 있는지 — 단계마다 다릅니다
+#
+#  1~3단계와 올해의 카드에는 대운·세운을 넣지 않습니다. (예전과 같음)
+#  '올해의 흐름' 한 곳에서만 파이썬이 계산한 값을 넣어주고,
+#  그때도 "계산하지 말고 주어진 값만 써라" 를 못 박습니다.
+# ---------------------------------------------------------------
+NO_LUCK_RULE = """- 주어지지 않은 항목(예: 상승궁 없음, 대운/연운 없음)은 근거로 삼지 마라.
+- 대운·연운·세운 데이터는 제공되지 않는다. 특정 연도나 월을 지어내 예언하지 마라."""
+
+# 올해의 흐름 전용 — 대운·세운이 [CALCULATED_LUCK] 블록으로 주어집니다.
+GIVEN_LUCK_RULE = """- 주어지지 않은 항목(예: 상승궁 없음)은 근거로 삼지 마라.
+- 대운·세운은 [CALCULATED_LUCK] 블록으로 Python 이 계산을 마쳐 넘겨준다.
+  거기 적힌 간지와 연도 구간만 쓰고, 스스로 뽑아내거나 다른 값으로 바꾸지 마라.
+- 월운(月運)·일운(日運)은 주어지지 않는다.
+  "몇 월에", "언제쯤" 처럼 올해 안의 시점을 짚어 예언하지 마라."""
+
 SYSTEM_INSTRUCTION = _PERSONA_TEMPLATE.format(
     linking_step=STEP_LINKING_STEP,
     ground_rule=STEP_GROUND_RULE,
+    luck_rule=NO_LUCK_RULE,
 )
 
 # 올해의 카드 전용 — 고민에서 독립된 페르소나
 YEAR_CARD_SYSTEM_INSTRUCTION = _PERSONA_TEMPLATE.format(
     linking_step=CARD_LINKING_STEP,
     ground_rule=CARD_GROUND_RULE,
+    luck_rule=NO_LUCK_RULE,
+)
+
+# 올해의 흐름 전용 — 고민과 연결하되, 대운·세운은 주어진 값만 쓴다
+YEAR_FLOW_SYSTEM_INSTRUCTION = _PERSONA_TEMPLATE.format(
+    linking_step=STEP_LINKING_STEP,
+    ground_rule=STEP_GROUND_RULE,
+    luck_rule=GIVEN_LUCK_RULE,
 )
 
 
@@ -348,6 +373,47 @@ class Step3Answer(BaseModel):
     closing: str = Field(description="할매가 마지막으로 남기는 한마디. 두세 문장.")
 
 
+class YearFlowAnswer(BaseModel):
+    """올해의 흐름 — 대운 × 세운 (전체 900~1,400자)
+
+    [무엇이 여기 없는가]
+        대운 간지 · 세운 간지 · 연도 구간은 이 구조에 넣지 않습니다.
+        그 값은 파이썬(daeun.py)이 계산한 것이 원본이고, 화면에도 그 값이
+        그대로 그려집니다. 할매는 '해석 글'만 채웁니다.
+        (모델에게 간지 칸을 주면 결국 다른 글자를 적어 넣습니다)
+    """
+
+    opening: str = Field(
+        description="여는 말 한두 문장. Step1~3 을 다 들은 사람에게 "
+        "'이제 큰 흐름을 짚어주마' 하고 건네는 말."
+    )
+    daeun_reading: str = Field(
+        default="",
+        description="A. 지금 지나고 있는 대운. 주어진 대운 간지의 큰 흐름과 "
+        "그것이 이 사람 원국(일간·오행·월령)과 어떤 관계인지. 250~400자. "
+        "대운이 주어지지 않았으면 빈 글자로 두어라.",
+    )
+    sewoon_reading: str = Field(
+        description="B. 올해의 세운. 올해 특히 강해지는 흐름과 그것이 원국과 "
+        "어떤 식으로 만나는지. 250~400자."
+    )
+    push: str = Field(
+        description="C-1. 올해 밀어도 되는 방향. 대운과 세운이 겹치는 자리에서 "
+        "나오는 것으로 쓸 것. 100~200자."
+    )
+    careful: str = Field(
+        description="C-2. 올해 조심해야 할 패턴. 겁주지 말고, 이 사람이 실제로 "
+        "빠지기 쉬운 형태로. 100~200자."
+    )
+    concern_link: str = Field(
+        description="C-3. 지금 이 사람의 고민 분야·추가 질문과 이 흐름이 "
+        "어떻게 연결되는지. 확정적인 사건·날짜 예측은 하지 말 것. 150~250자."
+    )
+    closing: str = Field(
+        description="할매가 남기는 한마디 한두 문장. 짧게 끊을 것."
+    )
+
+
 class YearCardDraft(BaseModel):
     """올해의 카드 — Gemini 가 채워 보내는 칸만 모은 모양.
 
@@ -439,6 +505,126 @@ STEP_SCHEMAS = {1: Step1Answer, 2: Step2Answer, 3: Step3Answer}
 
 
 # ===============================================================
+#  2-2. 관계 상태 (연애·관계 고민을 고른 사람에게만 묻습니다)
+#
+#  [왜 만들었나]
+#      "연애" 하나만 받으면 할매(Gemini)가 사용자를 솔로라고 짐작하고
+#      "소개팅에 나가라", "새로운 사람을 만나보라" 같은 조언을 했습니다.
+#      기혼인 사람에게는 쓸모없다 못해 무례한 말이 됩니다.
+#      그래서 관계 상태를 '추측 대상'에서 '확정 입력값'으로 옮겼습니다.
+#
+#  [이 서비스의 원칙과 같은 결]
+#      사주 명식·대운·세운과 똑같이 다룹니다.
+#          사람이 고른다  →  파이썬이 그대로 넘긴다  →  Gemini 는 해석만 한다
+#      Gemini 가 관계 상태를 스스로 정하는 일은 없습니다.
+#
+#  [올해의 카드와는 무관합니다]
+#      카드는 "같은 사람 + 같은 해 = 한 장" 이라, 관계 상태를
+#      stable_key 에도 카드 프롬프트에도 넣지 않습니다. (정책 변경 없음)
+# ===============================================================
+# 이 고민을 골랐을 때만 관계 상태를 묻습니다.
+RELATIONSHIP_CONCERN = "연애·관계"
+
+RELATIONSHIP_QUESTION = "현재 관계 상태를 알려주세요."
+
+# 고르지 않았거나 밝히고 싶지 않은 경우에 쓰는 값.
+# (라디오를 비워둔 채 제출해도 이 값으로 떨어져, 아무것도 짐작하지 않습니다)
+RELATIONSHIP_UNKNOWN = "말하고 싶지 않아요"
+
+RELATIONSHIP_OPTIONS = [
+    "솔로·새 인연",
+    "썸·연애중",
+    "기혼·부부·가정",
+    RELATIONSHIP_UNKNOWN,
+]
+
+# answers dict 에 담기는 칸 이름. 코드에서 이 이름으로 찾습니다.
+RELATIONSHIP_CONTEXT_KEY = "관계 상태"
+
+# 상태마다 '무엇을 중심으로 해석할지'와 '무엇을 하지 말지'를 못 박아둡니다.
+# 화면·프롬프트·테스트가 모두 이 표 하나를 봅니다.
+RELATIONSHIP_POLICIES = {
+    "솔로·새 인연": (
+        "새로운 관계를 만들어가는 방식으로 해석하라. "
+        "사람을 만나는 방식, 관계에 들어설 때 되풀이되는 패턴, "
+        "누구에게 마음이 기우는지 고르는 기준을 중심으로 본다. "
+        "이미 사귀는 상대나 배우자가 있다고 전제하지 마라."
+    ),
+    "썸·연애중": (
+        "지금 곁에 있는 상대와의 관계로 해석하라. "
+        "소통 방식, 관계를 진전시키는 속도와 방법, 되풀이되는 갈등과 "
+        "선택의 패턴을 중심으로 본다. "
+        "'새로운 사람을 만나보라'는 조언은 하지 마라. "
+        "결혼했다고 전제하지도 마라."
+    ),
+    "기혼·부부·가정": (
+        "배우자와 가정 안의 관계로 해석하라. "
+        "배우자와의 소통 방식, 가정 안에서의 균형과 역할, "
+        "실제로 해볼 수 있는 행동을 중심으로 본다. "
+        "새로운 인연을 찾으라는 조언은 **절대** 하지 마라. "
+        "소개팅·새로운 만남·이별을 권하는 말은 어떤 형태로도 쓰지 마라."
+    ),
+    RELATIONSHIP_UNKNOWN: (
+        "관계 상태를 알 수 없다. 솔로인지, 사귀는 중인지, 결혼했는지 "
+        "**어느 쪽도 추측하지 마라.** "
+        "관계 전반에서 나타나는 성향과 되풀이되는 행동 패턴만 해석하라. "
+        "특정 상태를 전제로 한 행동(소개팅·고백·프러포즈·이혼 등)은 "
+        "지령으로 내지 마라. "
+        "'연인', '배우자', '솔로', '애인' 같은 낱말로 상태를 지어내지 말고 "
+        "'가까운 사람', '상대', '곁에 있는 사람' 처럼 상태를 가리지 않는 "
+        "말을 써라."
+    ),
+}
+
+# 관계 상태를 바꿔 말하지 못하게 막는 규칙. 사주 명식의 잠금 규칙과 같은 방식입니다.
+RELATIONSHIP_LOCK_RULES = """[관계 상태 사용 규칙 — 어기면 답변 실패로 본다]
+- 위 관계 상태는 사용자가 직접 고른 확정값이다. 다른 상태를 가정하지 마라.
+- 위에 적힌 상태가 아닌 상황을 전제로 한 조언을 하지 마라.
+- 상태를 짐작하게 하는 표현을 쓰지 마라.
+  (예: "아직 인연을 못 만났으니", "연인이 없으니", "혼자인 지금")
+- 추가 질문에 관계 상황이 분명하게 적혀 있으면 그 내용을 함께 참고하라.
+  다만 분명하지 않으면 특정 상태로 단정하지 말고, 위에 적힌 상태만 따르라.
+- 사주·점성술 값으로 관계 상태를 역추적하려 하지 마라.
+  명식에는 지금 연애 중인지 결혼했는지가 적혀 있지 않다.
+- 행동 지령(3단계)을 낼 때 특히 조심하라. 지령은 실제로 하라는 말이라,
+  상태와 어긋나면 그대로 무례한 말이 된다.
+  (예: 기혼이라고 적혀 있는데 "소개팅에 나가라", "새로운 사람을 만나라")"""
+
+
+def relationship_context(answers: dict | None) -> str | None:
+    """이 사람의 관계 상태. 물어보지 않은 고민이면 None.
+
+    '연애·관계' 를 고른 사람에게만 값이 있습니다.
+    고르지 않은 채 제출했으면 '말하고 싶지 않아요' 로 봅니다 —
+    비어 있다고 솔로로 넘겨짚으면 안 되니까요.
+    """
+    if not answers:
+        return None
+    if answers.get("고민 분야") != RELATIONSHIP_CONCERN:
+        return None
+    value = (answers.get(RELATIONSHIP_CONTEXT_KEY) or "").strip()
+    return value if value in RELATIONSHIP_POLICIES else RELATIONSHIP_UNKNOWN
+
+
+def build_relationship_block(answers: dict | None) -> str:
+    """관계 상태를 프롬프트에 붙일 수 있는 글자로. 해당 없으면 빈 글자.
+
+    이 함수가 관계 상태가 프롬프트로 나가는 유일한 통로입니다.
+    """
+    state = relationship_context(answers)
+    if state is None:
+        return ""
+
+    return "\n".join([
+        "[관계 상태 — 사용자가 직접 고른 확정 입력값]",
+        f"- 현재 관계 상태: {state}",
+        f"- 이 상태를 기준으로만 해석한다: {RELATIONSHIP_POLICIES[state]}",
+        "",
+        RELATIONSHIP_LOCK_RULES,
+    ])
+
+
+# ===============================================================
 #  3. 사용자 정보 블록 만들기
 # ===============================================================
 def _as_text(value) -> str:
@@ -492,6 +678,12 @@ def build_profile_block(
         f"- 추가 질문: {_as_text(answers.get('추가 질문'))}"
     ]
 
+    # 관계 상태는 '연애·관계' 를 고른 사람에게만 있습니다.
+    # 없는 사람에게는 이 블록 자체가 붙지 않습니다.
+    relationship = build_relationship_block(answers)
+    if relationship:
+        blocks.append(relationship)
+
     if saju:
         blocks.append(format_saju_for_prompt(saju))
     else:
@@ -523,11 +715,23 @@ NEXT_BUTTON_LABELS = {
     3: "그래서 저는 뭘 하면 좋을까요?",
 }
 
-LOADING_MESSAGES = {
-    1: "할매가 네 팔자를 들여다보고 있어요...",
-    2: "할매가 더 깊은 이야기를 고르고 있어요...",
-    3: "할매가 해볼 만한 일을 꼽아보고 있어요...",
-}
+# 로딩 문구는 progress.py 한 곳으로 옮겼습니다.
+#     예전에는 단계마다 문구 하나를 스피너에 걸어두었는데,
+#     Gemini 한 번 호출이 10초 가까이 걸리다 보니 같은 글이 계속 떠 있어
+#     "앱이 멈췄나?" 하는 오해가 생겼습니다.
+#     지금은 기다리는 동안 문구가 바뀝니다 — progress.STEP_STAGES 참고.
+
+# 1단계 맨 끝에 붙는 예고 한 문장 — 뒤에 '올해의 흐름'이 있다는 걸 알려줍니다.
+#
+# [왜 Gemini 에게 맡기지 않았나]
+#     이 문장은 "뒤에 무엇이 더 있다" 는 서비스 안내라서, 있다 없다 하면
+#     사용자가 흐름을 놓칩니다. 매번 똑같이 나와야 하므로 파이썬 고정 문구로 둡니다.
+#     (Step2·3 에서는 이 예고를 되풀이하지 않습니다 — 중복 안내는 지저분합니다)
+STEP1_YEAR_FLOW_TEASER = (
+    "마지막엔 네 대운과 올해 세운이 어디서 맞물리는지까지 짚어주마. "
+    "올해 무엇을 밀고 무엇을 조심해야 하는지 그때 확실히 일러줄 테니 "
+    "끝까지 잘 따라오너라."
+)
 
 STEP1_TASK = """[이번에 할 일 — 첫 번째 이야기]
 위 사람의 사주와 점성술 데이터를 근거로 첫 번째 이야기를 들려주거라.
@@ -597,19 +801,28 @@ def build_prompt(
 
     1단계에는 사용자 정보 블록을 통째로 붙입니다.
     2·3단계는 앞선 대화가 함께 전달되지만, 대화가 길어질수록 모델이 명식을
-    슬금슬금 바꿔 말하는 일이 생깁니다. 그래서 확정 명식(CALCULATED_SAJU)만
-    단계마다 다시 붙여 못을 박습니다. (사용자 정보는 다시 붙이지 않습니다)
+    슬금슬금 바꿔 말하는 일이 생깁니다. 그래서 확정 명식(CALCULATED_SAJU)과
+    관계 상태만 단계마다 다시 붙여 못을 박습니다.
+    (이름·생년월일 같은 나머지 사용자 정보는 다시 붙이지 않습니다)
     """
     if step == 1:
         return build_profile_block(answers, saju, astro) + "\n\n" + STEP1_TASK
 
-    return _reanchor_block(saju, astro) + STEP_TASKS[step]
+    return _reanchor_block(saju, astro, answers) + STEP_TASKS[step]
 
 
-def _reanchor_block(saju: dict | None, astro: dict | None) -> str:
+def _reanchor_block(
+    saju: dict | None,
+    astro: dict | None,
+    answers: dict | None = None,
+) -> str:
     """2·3단계 맨 앞에 다시 붙이는 확정값 블록.
 
     개인정보(이름·생년월일 등)는 넣지 않습니다. 계산 결과만 다시 못 박습니다.
+
+    관계 상태도 여기서 다시 붙입니다. 3단계 행동 지령까지 가는 동안
+    모델이 "그러고 보니 새 사람을 만나보라" 로 흘러가는 일이 실제로 있어서,
+    단계마다 같은 값을 다시 보여줍니다.
     """
     from astrology import format_astrology_for_prompt
     from saju import format_saju_for_prompt
@@ -621,6 +834,10 @@ def _reanchor_block(saju: dict | None, astro: dict | None) -> str:
         parts.append("[사주 명식]\n계산하지 못했다. 사주를 근거로 든 해석은 하지 말 것.")
     if astro:
         parts.append(format_astrology_for_prompt(astro))
+
+    relationship = build_relationship_block(answers)
+    if relationship:
+        parts.append(relationship)
 
     return "\n\n".join(parts) + "\n\n"
 
@@ -653,8 +870,15 @@ def _text_fields(answer) -> list[tuple[str, str]]:
     return found
 
 
-def find_saju_contradictions(answer, saju: dict | None) -> list[str]:
-    """할매 답변이 확정 명식과 어긋나는 곳을 찾아 문장으로 돌려줍니다."""
+def find_saju_contradictions(
+    answer, saju: dict | None, extra_allowed: set[str] | None = None
+) -> list[str]:
+    """할매 답변이 확정 명식과 어긋나는 곳을 찾아 문장으로 돌려줍니다.
+
+    extra_allowed 에는 '이 단계에서는 써도 되는 간지' 를 넣습니다.
+    올해의 흐름에서는 대운·세운 간지가 여기에 들어갑니다 —
+    파이썬이 계산해 넘겨준 값이라 명식에 없어도 어긋난 것이 아닙니다.
+    """
     if not saju:
         return []
 
@@ -666,6 +890,7 @@ def find_saju_contradictions(answer, saju: dict | None) -> list[str]:
         (facts["년주"], facts["월주"], facts["일주"], facts["시주"])
         if pillar
     }
+    allowed |= (extra_allowed or set())
     every_ganji = {stem + branch
                    for index, stem in enumerate(CHEONGAN)
                    for offset, branch in enumerate(JIJI)
@@ -910,6 +1135,282 @@ def ask_halmae(
 
 
 # ===============================================================
+#  5-2. 올해의 흐름 — 대운 × 세운
+#
+#  [자리]  Step1 → Step2 → Step3 → **올해의 흐름** → 올해의 카드
+#          Step 번호를 붙이지 않습니다. 1/3·2/3·3/3 구조는 그대로 두고,
+#          그 뒤에 붙는 별도의 다리(bridge) 구간입니다.
+#
+#  [원칙] 대운·세운은 파이썬(daeun.py)이 계산합니다.
+#         여기서 하는 일은 계산이 끝난 값을 프롬프트에 '그대로' 실어보내는 것뿐입니다.
+#         Gemini 에게 간지를 뽑게 하거나 연도를 정하게 하지 않습니다.
+#
+#  [올해의 카드와의 관계]  이 답변은 카드 프롬프트에 넣지 않습니다.
+#         카드는 예전 그대로 "계산값만"으로 만들어집니다. (정책 변경 없음)
+# ===============================================================
+YEAR_FLOW_TITLE = "할매가 올해의 큰 흐름까지 짚어주마"
+YEAR_FLOW_SUBTITLE = "대운 × 세운"
+# 성별을 고르지 않아 대운이 빠진 경우 — 제목에 없는 것을 적어두지 않습니다.
+YEAR_FLOW_SUBTITLE_SEWOON = "올해의 세운"
+YEAR_FLOW_BUTTON = "할매, 올해 흐름도 봐줘"
+YEAR_FLOW_ERROR = "올해의 흐름을 계산하는 데 잠시 문제가 생겼단다."
+
+# 흐름은 이야기라기보다 '정리'라, 1~3단계보다 조금 낮게 잡습니다.
+YEAR_FLOW_TEMPERATURE = 0.7
+
+YEAR_FLOW_TASK = """할매, 올해 흐름도 봐줘.
+
+[이번에 할 일 — 올해의 흐름 (대운 × 세운)]
+위 [CALCULATED_LUCK] 에 파이썬이 계산해둔 대운과 세운이 있다.
+그 값을 해석해서, 이 사람의 올해를 큰 흐름으로 정리해주거라.
+
+A. daeun_reading — 지금 지나고 있는 대운
+   주어진 대운 간지의 큰 흐름 + 이 사람 원국(일간·오행·월령)과의 관계
+B. sewoon_reading — 올해의 세운
+   올해 특히 강해지는 흐름 + 그것이 원국과 만나는 방식
+C. push / careful / concern_link — 대운과 세운이 만나는 지점
+   밀어도 되는 방향 / 조심할 패턴 / 지금 고민과 연결되는 의미
+
+[분량] 전체 합쳐 한글 900~1,400자.
+   이 사람은 이미 1~3단계의 긴 글을 다 읽은 뒤다. 핵심만 정리해라.
+   대운·세운이 무엇인지 설명하느라 분량을 늘리지 마라.
+   앞 단계에서 이미 한 말을 다시 풀어 쓰지 마라.
+
+[반드시 지킬 것]
+- 간지와 연도 구간은 [CALCULATED_LUCK] 에 적힌 글자·숫자를 그대로 옮겨 적어라.
+- 시기는 **나이가 아니라 연도**로 말하라. ("2017년부터 2026년까지" 처럼)
+  나이는 만세력마다 한 해쯤 다를 수 있으니 "만 O세부터" 라고 단정하지 마라.
+- 명리학적 해석이라는 점이 드러나게 써라.
+  ("명리에서는 ~로 본다", "대운이 ~하면 ~로 해석한다")
+- 어려운 말(대운·세운·비겁·관성 등)은 쓰자마자 바로 쉬운 말로 풀어줘라.
+
+[금지]
+- 대운·세운을 스스로 계산하거나, 주어진 것과 다른 간지·연도를 적는 것
+- "올해 반드시 결혼한다", "몇 월에 취업한다" 같은 확정적인 사건·날짜 예측
+- 올해 안의 특정 월·계절을 짚는 것 (월운 데이터는 주어지지 않았다)
+- 질병·투자 종목·법률 판단을 단정하는 것
+- 1~3단계에서 한 말을 표현만 바꿔 되풀이하는 것"""
+
+
+def allowed_luck_pillars(daeun: dict | None, sewoon: dict) -> set[str]:
+    """이 단계에서 할매가 적어도 되는 간지 — 파이썬이 계산해 넘겨준 것들.
+
+    현재 대운과 올해 세운, 그리고 참고로 함께 넘긴 앞뒤 대운까지입니다.
+    (프롬프트에 적어 보낸 값과 정확히 같은 목록이어야 합니다)
+    """
+    allowed = {sewoon["pillar"]}
+    if daeun:
+        current = daeun.get("current")
+        allowed |= {
+            period["pillar"] for period in daeun.get("periods", [])
+            if current is None
+            or abs(period["order"] - current["order"]) <= 1
+        }
+        allowed.add(daeun["month_pillar"])
+    return allowed
+
+
+# 대운이 없을 때(성별 미선택) — A 파트를 빼고 세운만 다룹니다.
+# 없는 대운을 설명하려 들거나 "성별을 알려달라" 고 조르지 않게 못 박아둡니다.
+YEAR_FLOW_TASK_SEWOON_ONLY = """할매, 올해 흐름도 봐줘.
+
+[이번에 할 일 — 올해의 흐름 (세운)]
+위 [CALCULATED_LUCK] 에 파이썬이 계산해둔 세운이 있다.
+이번에는 대운이 주어지지 않았다. 세운만 가지고 이 사람의 올해를 정리해주거라.
+
+A. daeun_reading — **빈 글자로 두어라.** (대운이 없으므로 아무것도 쓰지 마라)
+B. sewoon_reading — 올해의 세운
+   올해 특히 강해지는 흐름 + 그것이 원국(일간·오행·월령)과 만나는 방식
+C. push / careful / concern_link — 올해 세운이 원국과 만나는 지점
+   밀어도 되는 방향 / 조심할 패턴 / 지금 고민과 연결되는 의미
+
+[분량] 전체 합쳐 한글 600~900자.
+   이 사람은 이미 1~3단계의 긴 글을 다 읽은 뒤다. 핵심만 정리해라.
+   대운이 빠진 만큼 세운 이야기를 억지로 늘리지 마라.
+
+[반드시 지킬 것]
+- 간지와 연도는 [CALCULATED_LUCK] 에 적힌 글자·숫자를 그대로 옮겨 적어라.
+- 명리학적 해석이라는 점이 드러나게 써라.
+- 어려운 말(세운·비겁·관성 등)은 쓰자마자 바로 쉬운 말로 풀어줘라.
+
+[금지]
+- 대운을 언급하는 것. 있다고 가정하거나 지어내는 것.
+- 성별을 알려달라고 요구하거나, 성별이 없어 아쉽다고 말하는 것
+  (그 안내는 화면이 이미 따로 하고 있다. 답변에서 되풀이하지 마라.)
+- "올해 반드시 결혼한다", "몇 월에 취업한다" 같은 확정적인 사건·날짜 예측
+- 올해 안의 특정 월·계절을 짚는 것 (월운 데이터는 주어지지 않았다)
+- 질병·투자 종목·법률 판단을 단정하는 것
+- 1~3단계에서 한 말을 표현만 바꿔 되풀이하는 것"""
+
+
+def build_year_flow_prompt(
+    answers: dict,
+    saju: dict | None,
+    astro: dict | None,
+    daeun: dict | None,
+    sewoon: dict,
+    no_daeun_reason: str | None = None,
+) -> str:
+    """올해의 흐름 프롬프트.
+
+    [들어가는 것]
+        확정 명식(다시 못 박기) · 파이썬이 계산한 대운/세운 ·
+        고민 분야 · 추가 질문 (이 둘은 '고민과 연결하라'는 요구사항 때문)
+    [들어가지 않는 것]
+        이름 · 생년월일 · 출생시간 · 출생지역
+        (대운·세운은 이미 계산이 끝났으므로 원본 출생정보가 필요 없습니다)
+    """
+    from daeun import format_year_flow_for_prompt
+
+    blocks = [
+        _reanchor_block(saju, astro, answers).rstrip(),
+        format_year_flow_for_prompt(daeun, sewoon, saju, no_daeun_reason),
+        "[지금 이 사람의 고민]\n"
+        f"- 고민 분야: {_as_text(answers.get('고민 분야'))}\n"
+        f"- 추가 질문: {_as_text(answers.get('추가 질문'))}",
+        YEAR_FLOW_TASK if daeun else YEAR_FLOW_TASK_SEWOON_ONLY,
+    ]
+    return "\n\n".join(blocks)
+
+
+def build_year_flow_payload(
+    answers: dict,
+    saju: dict | None,
+    astro: dict | None,
+    daeun: dict | None,
+    sewoon: dict,
+    history: list | None = None,
+    no_daeun_reason: str | None = None,
+) -> dict:
+    """Gemini 로 나가는 '올해의 흐름' 요청을 그대로 담은 dict.
+
+    테스트는 Gemini 를 부르지 않고 이 dict 만 들여다보면 됩니다 —
+    "대운/세운 값이 파이썬 계산값 그대로인가",
+    "모델에게 계산을 시키는 문장이 없는가" 를 API 호출 없이 확인할 수 있습니다.
+    """
+    question = build_year_flow_prompt(
+        answers, saju, astro, daeun, sewoon, no_daeun_reason
+    )
+    contents = [
+        {"role": turn["role"], "parts": [{"text": turn["text"]}]}
+        for turn in (history or [])
+    ]
+    contents.append({"role": "user", "parts": [{"text": question}]})
+    return {
+        "system_instruction": YEAR_FLOW_SYSTEM_INSTRUCTION,
+        "contents": contents,
+        "temperature": YEAR_FLOW_TEMPERATURE,
+        "question": question,
+    }
+
+
+def ask_year_flow(
+    answers: dict,
+    saju: dict | None,
+    astro: dict | None,
+    daeun: dict | None,
+    sewoon: dict,
+    history: list | None = None,
+    *,
+    no_daeun_reason: str | None = None,
+    api_key: str | None = None,
+) -> YearFlowAnswer:
+    """올해의 흐름 한 덩어리를 받아옵니다.
+
+    대운·세운은 이미 계산이 끝난 값으로 넘어갑니다.
+    Gemini 는 그 값을 해석만 하고, 간지나 시기를 새로 만들지 않습니다.
+
+    앞선 1~3단계 대화(history)를 함께 보내는 이유는 딱 하나 —
+    앞에서 한 말을 되풀이하지 않게 하기 위해서입니다.
+    (올해의 카드는 반대로 대화를 절대 넘기지 않습니다. 정책이 다릅니다)
+    """
+    # --- Mock 모드: Gemini 를 부르지 않고 미리 만들어둔 답을 씁니다 ---
+    if USE_MOCK_AI:
+        from mock_ai import MOCK_DELAY_SECONDS, mock_year_flow
+
+        sleep(MOCK_DELAY_SECONDS)
+        logger.info("올해의 흐름 Mock 응답 사용 · Gemini 호출 없음")
+        return mock_year_flow(answers, saju, daeun, sewoon)
+
+    client = get_client(api_key)
+    payload = build_year_flow_payload(
+        answers, saju, astro, daeun, sewoon, history, no_daeun_reason
+    )
+
+    config = types.GenerateContentConfig(
+        system_instruction=payload["system_instruction"],
+        response_mime_type="application/json",
+        response_schema=YearFlowAnswer,
+        max_output_tokens=MAX_OUTPUT_TOKENS,
+        temperature=payload["temperature"],
+    )
+
+    try:
+        response = _generate_with_retry(client, payload["contents"], config)
+    except genai_errors.ClientError as exc:
+        if exc.code == 429:
+            raise HalmaeError(
+                "지금은 요청이 너무 많아 할매가 잠시 쉬고 있어요. "
+                "1~2분 뒤에 다시 시도해주세요."
+            ) from exc
+        if exc.code in (401, 403) or "api key" in str(exc).lower():
+            logger.error(
+                "Gemini 인증 실패 (코드 %s) — GEMINI_API_KEY 값과 권한을 확인하세요.",
+                exc.code,
+            )
+            raise HalmaeError(
+                "할매가 지금은 답을 할 수 없는 상태예요. "
+                "잠시 뒤에 다시 시도해주세요."
+            ) from exc
+        raise HalmaeError(
+            f"요청을 보내는 중 문제가 생겼어요. (오류 코드 {exc.code})"
+        ) from exc
+    except genai_errors.ServerError as exc:
+        raise HalmaeError(
+            "할매가 잠시 자리를 비웠어요. 잠시 뒤에 다시 시도해주세요."
+        ) from exc
+    except HalmaeError:
+        raise
+    except Exception as exc:
+        raise HalmaeError(
+            "올해의 흐름을 받아오지 못했어요. "
+            "인터넷 연결을 확인한 뒤 다시 시도해주세요."
+        ) from exc
+
+    answer = _parse_answer(response, YearFlowAnswer)
+
+    # 대운이 없으면 A 파트는 무조건 비웁니다.
+    # 프롬프트로도 막아두었지만, 모델이 굳이 써넣었을 때 화면에
+    # 계산하지 않은 대운 이야기가 뜨는 일만은 없어야 합니다.
+    if not daeun:
+        answer.daeun_reading = ""
+
+    # 할매가 확정값을 바꿔 말했는지 (1~3단계와 같은 검사).
+    # 이 단계에서는 대운·세운 간지도 '확정값' 이라 어긋난 것으로 세지 않습니다.
+    contradictions = find_saju_contradictions(
+        answer, saju, allowed_luck_pillars(daeun, sewoon)
+    )
+    if contradictions:
+        logger.warning(
+            "올해의 흐름 — 확정 명식에 없는 간지를 %d군데에서 말했습니다. "
+            "화면 값은 파이썬 계산값이라 영향은 없지만 프롬프트 점검 필요.",
+            len(contradictions),
+        )
+
+    # 운영 로그에는 글 내용을 남기지 않습니다. 길이와 토큰 수만 남깁니다.
+    usage = getattr(response, "usage_metadata", None)
+    if usage is not None:
+        logger.info(
+            "올해의 흐름 완료 · 모델 %s · 입력 %s토큰 / 출력 %s토큰 · %d자",
+            GEMINI_MODEL,
+            getattr(usage, "prompt_token_count", "?"),
+            getattr(usage, "candidates_token_count", "?"),
+            answer_length(answer),
+        )
+    return answer
+
+
+# ===============================================================
 #  6. 올해의 카드
 #
 #  [정책] 카드는 "같은 사람 + 같은 출생정보 + 같은 해"에 딱 한 장입니다.
@@ -922,8 +1423,6 @@ def ask_halmae(
 #      사주(년·월·일·시주 · 일간 · 오행) · 점성술(Sun · Moon · Ascendant) ·
 #      올해 연도와 그 해의 간지
 # ===============================================================
-YEAR_CARD_LOADING = "할매가 올해 네 카드를 고르고 있어요..."
-
 # 카드는 "같은 사람이면 늘 같은 카드"여야 하므로 온도를 낮춥니다.
 # (1~3단계는 이야기라 다양해도 좋지만, 카드는 흔들리면 믿음이 가지 않습니다.)
 YEAR_CARD_TEMPERATURE = 0.3

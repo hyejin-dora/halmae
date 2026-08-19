@@ -490,10 +490,16 @@ def check_disclaimer() -> None:
 # ===============================================================
 VIEW_EVENTS = {
     "landing_view", "step1_view", "step2_view", "step3_view",
+    # 올해의 흐름은 Step3 과 카드 사이에 놓인 다리 구간입니다.
+    # 화면 노출이므로 rerun 으로 두 번 세면 안 됩니다.
+    "year_flow_view",
     "card_view", "feedback_view", "premium_view",
 }
 ACTION_EVENTS = {
     "start_click", "input_submit", "more_click", "action_click",
+    "year_flow_click",
+    # 올해의 카드 클릭은 예전부터 card_click 한 이름만 씁니다.
+    # (year_card_click 을 새로 만들면 같은 행동이 두 이름으로 갈라집니다)
     "card_click", "premium_click",
     "purchase_intent_yes", "purchase_intent_no",
     "feedback_positive", "feedback_negative",
@@ -580,7 +586,8 @@ def check_funnel_no_duplicates() -> None:
     for pattern in view_calls:
         covered_views |= _matches(pattern, VIEW_EVENTS)
     missing = VIEW_EVENTS - covered_views
-    check("요청한 화면 노출 이벤트 7개가 모두 있다", not missing, str(missing))
+    check(f"요청한 화면 노출 이벤트 {len(VIEW_EVENTS)}개가 모두 있다",
+          not missing, str(missing))
 
     covered_actions: set[str] = set()
     for pattern in action_calls:
@@ -1022,21 +1029,51 @@ def check_api_guards() -> None:
           "return                      # Gemini를 부르지 않습니다" in body)
     check("새로 만든 카드는 곧바로 저장해둔다", "card_store.save_card(" in body)
 
-    # Gemini 를 부르는 자리가 이 둘뿐인지
+    # 올해의 흐름도 같은 방식으로 막혀 있는지
+    flow = _func("ensure_year_flow")
+    flow_first = flow.body[1] if flow and len(flow.body) > 1 else None
+    check("ensure_year_flow() 는 이미 받은 흐름이 있으면 곧바로 돌아선다",
+          isinstance(flow_first, ast.If)
+          and any(isinstance(s, ast.Return) for s in flow_first.body)
+          and "year_flow" in _source_of(flow_first))
+
+    # 버튼을 두 번 눌러도 요청이 두 번 나가지 않는지 —
+    # 누르면 표시(pending)만 세우고 화면을 다시 그려 버튼을 치웁니다.
+    render_flow = _source_of(_func("render_year_flow"))
+    check("흐름 버튼은 누르는 즉시 사라진다 (중복 클릭 방지)",
+          "year_flow_pending = True" in render_flow
+          and "st.rerun()" in render_flow)
+    render_card = _source_of(_func("render_year_card"))
+    check("카드 버튼도 누르는 즉시 사라진다 (중복 클릭 방지)",
+          "year_card_pending = True" in render_card
+          and "st.rerun()" in render_card)
+
+    # Gemini 를 부르는 자리가 이 셋뿐인지
+    ai_names = ("ask_halmae", "ask_year_card", "ask_year_flow")
     ai_calls = [
         f"app.py:{c.lineno}" for c in _calls(APP_TREE)
-        if _call_name(c) in ("ask_halmae", "ask_year_card")
+        if _call_name(c) in ai_names
     ]
-    check("Gemini 를 부르는 곳이 두 군데뿐이다", len(ai_calls) == 2, str(ai_calls))
+    check("Gemini 를 부르는 곳이 세 군데뿐이다", len(ai_calls) == 3, str(ai_calls))
 
     inside = []
-    for name in ("ensure_reply", "ensure_year_card"):
+    for name in ("ensure_reply", "ensure_year_card", "ensure_year_flow"):
         node = _func(name)
         inside += [
             c.lineno for c in _calls(node)
-            if _call_name(c) in ("ask_halmae", "ask_year_card")
+            if _call_name(c) in ai_names
         ]
-    check("두 호출 모두 '한 번만' 검사를 통과한 뒤에 있다", len(inside) == 2)
+    check("세 호출 모두 '한 번만' 검사를 통과한 뒤에 있다", len(inside) == 3)
+
+    # 올해의 카드 정책 — 흐름 답변이나 고민이 카드로 새어 들어가지 않는지
+    card_body = _source_of(_func("ensure_year_card"))
+    card_code = "\n".join(
+        line for line in card_body.splitlines()
+        if not line.strip().startswith("#")
+    )
+    for leak in ("year_flow", "daeun", "sewoon", "고민 분야", "추가 질문"):
+        check(f"카드 준비 코드에 '{leak}' 이 들어가지 않는다",
+              leak not in card_code)
 
     # 카드는 같은 사람·같은 해면 같은 열쇠 (고민이 달라도)
     from datetime import date, time

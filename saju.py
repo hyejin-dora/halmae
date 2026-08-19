@@ -631,6 +631,11 @@ def compute_saju(
         },
         "입춘 시각": f"{ipchun_moment:%Y-%m-%d %H:%M} KST",
         "사주 기준 연도": saju_year,
+        # 대운(daeun.py)이 절입까지의 거리를 재려면 '판정에 쓴 그 순간'이
+        # 그대로 필요합니다. 사주와 대운이 서로 다른 시각을 보면 안 되므로
+        # 여기서 계산한 값을 그대로 내보냅니다. (다시 만들지 않게)
+        "기준 시각(UTC)": utc_moment,
+        "기준 율리우스일": julian_day,
         "절기 계산 출처": SOLAR_TERM_SOURCE,
         "달력 정보": calendar_info,
         "주의사항": notes,
