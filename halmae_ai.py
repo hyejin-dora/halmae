@@ -22,6 +22,7 @@ Gemini 의 답을 자유 글이 아니라 **정해진 구조(JSON)** 로 받습�
 import json
 import logging
 from datetime import date, time
+from functools import lru_cache
 from time import sleep
 
 from google import genai
@@ -944,6 +945,21 @@ def get_client(api_key: str | None = None) -> genai.Client:
             "할매가 지금은 답을 할 수 없는 상태예요. "
             "잠시 뒤에 다시 시도해주세요."
         )
+    return _client_for(key)
+
+
+@lru_cache(maxsize=4)
+def _client_for(key: str) -> genai.Client:
+    """같은 열쇠면 같은 클라이언트를 재사용합니다.
+
+    genai.Client() 를 만드는 데 매번 50~100ms 가 듭니다. 한 사람이 한 번
+    보는 동안 Step1·2·3 · 올해의 흐름 · 올해의 카드까지 다섯 번 부르므로
+    그냥 두면 0.3초 안팎을 클라이언트 만드는 데만 씁니다.
+
+    클라이언트는 상태를 들고 있지 않고(요청마다 새로 보냄) 갈래(thread)
+    안전하므로 돌려 써도 됩니다. maxsize=4 는 개발 중 열쇠를 바꿔 끼울 때를
+    위한 여유입니다 — 열쇠를 로그에 남기지 않습니다.
+    """
     return genai.Client(api_key=key)
 
 
@@ -1036,9 +1052,10 @@ def ask_halmae(
     # --- Mock 모드: Gemini 를 부르지 않고 미리 만들어둔 답을 씁니다 ---
     #     대화 기록(history)은 실제와 똑같이 쌓아서, 단계 이동이 그대로 동작합니다.
     if USE_MOCK_AI:
-        from mock_ai import MOCK_DELAY_SECONDS, mock_step_answer
+        from mock_ai import mock_step_answer
 
-        sleep(MOCK_DELAY_SECONDS)          # 로딩 화면이 보이는지 확인용
+        # 일부러 쉬지 않습니다. 로딩 문구는 브라우저(CSS)가 돌리므로
+        # 화면을 보여주려고 응답을 늦출 이유가 없습니다. (progress.py 참고)
         answer = mock_step_answer(step, answers, saju, astro)
         history.append({"role": "user", "text": question})
         history.append(
@@ -1326,9 +1343,9 @@ def ask_year_flow(
     """
     # --- Mock 모드: Gemini 를 부르지 않고 미리 만들어둔 답을 씁니다 ---
     if USE_MOCK_AI:
-        from mock_ai import MOCK_DELAY_SECONDS, mock_year_flow
+        from mock_ai import mock_year_flow
 
-        sleep(MOCK_DELAY_SECONDS)
+        # 로딩 연출용 sleep 을 두지 않습니다. (progress.py 참고)
         logger.info("올해의 흐름 Mock 응답 사용 · Gemini 호출 없음")
         return mock_year_flow(answers, saju, daeun, sewoon)
 
@@ -1582,9 +1599,9 @@ def ask_year_card(
     """
     # --- Mock 모드: Gemini 를 부르지 않고 미리 만들어둔 카드를 씁니다 ---
     if USE_MOCK_AI:
-        from mock_ai import MOCK_DELAY_SECONDS, mock_year_card
+        from mock_ai import mock_year_card
 
-        sleep(MOCK_DELAY_SECONDS)
+        # 로딩 연출용 sleep 을 두지 않습니다. (progress.py 참고)
         card = mock_year_card(year_ganji["연도"], year_ganji)
         logger.info("올해의 카드 Mock 응답 사용 · Gemini 호출 없음")
         return card

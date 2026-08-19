@@ -22,6 +22,7 @@
 """
 
 import logging
+import threading
 from datetime import date, datetime, time, timezone
 from functools import lru_cache
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -120,10 +121,68 @@ def geocode_place(place: str) -> dict:
 # ===============================================================
 #  2. 위도 / 경도 → 시간대
 # ===============================================================
+_TZ_LOCK = threading.Lock()
+
+# 미리 읽기를 이미 시작했는지. (warm_up_async 가 서버당 한 번만 돌게 합니다)
+_TZ_START_LOCK = threading.Lock()
+_warm_started = False
+
+
 @lru_cache(maxsize=1)
 def _timezone_finder() -> TimezoneFinder:
-    """TimezoneFinder 는 만드는 데 시간이 걸려서 한 번만 만들어 재사용합니다."""
-    return TimezoneFinder()
+    """TimezoneFinder 는 만드는 데 시간이 걸려서 한 번만 만들어 재사용합니다.
+
+    처음 만들 때 자료 파일을 읽느라 0.7초쯤 걸립니다. warm_up() 이 미리
+    불러둘 수 있으니, 두 갈래(thread)에서 동시에 들어와도 하나만 만들도록
+    자물쇠로 감싸둡니다. (lru_cache 만으로는 동시에 둘이 만들 수 있습니다)
+    """
+    with _TZ_LOCK:
+        return TimezoneFinder()
+
+
+def warm_up() -> None:
+    """무거운 자료를 미리 읽어둡니다. 실패해도 조용히 넘어갑니다.
+
+    [왜 필요한가]
+        TimezoneFinder 를 처음 만드는 0.7초는 '첫 사용자의 첫 계산' 에
+        그대로 붙습니다. 사용자가 입력칸을 채우는 동안 미리 만들어두면
+        그 0.7초가 첫 답변 대기시간에서 사라집니다.
+
+    [안전한 이유]
+        하는 일은 로컬 자료 파일을 읽는 것뿐입니다. 인터넷에 나가지 않고,
+        st.session_state 를 보지 않고, 계산 결과를 바꾸지 않습니다.
+        그래서 딴 갈래(thread)에서 불러도 됩니다.
+    """
+    try:
+        _timezone_finder()
+    except Exception:
+        # 미리 읽기가 실패해도 나중에 실제 계산할 때 다시 시도합니다.
+        logger.debug("시간대 자료 미리 읽기 실패", exc_info=True)
+
+
+def warm_up_async() -> None:
+    """warm_up() 을 딴 갈래(thread)에서 시작하고 바로 돌아옵니다.
+
+    화면을 그리는 쪽이 이 줄에서 멈추면 안 되므로 join() 하지 않습니다.
+    daemon 갈래라 서버를 끄는 것도 막지 않습니다.
+
+    [서버당 딱 한 번만 돕니다]
+        "이미 시작했는지" 표시를 이 모듈이 들고 있습니다.
+        app.py 는 화면을 다시 그릴 때마다 처음부터 다시 실행되지만,
+        import 된 모듈(sys.modules)은 그대로 살아 있어서 표시가 남습니다.
+    """
+    global _warm_started
+    with _TZ_START_LOCK:
+        if _warm_started:
+            return
+        _warm_started = True
+    try:
+        threading.Thread(
+            target=warm_up, name="halmae-warmup", daemon=True,
+        ).start()
+    except Exception:
+        # 갈래를 못 만드는 환경이면 미리 읽기를 그냥 포기합니다.
+        logger.debug("미리 읽기 갈래를 만들지 못했습니다", exc_info=True)
 
 
 def find_timezone(latitude: float, longitude: float) -> str:

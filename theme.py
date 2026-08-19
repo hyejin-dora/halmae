@@ -1587,6 +1587,160 @@ def _css_dev(t: dict) -> str:
     """
 
 
+def _css_loading(t: dict) -> str:
+    """로딩 화면 — 기다리는 동안 브라우저가 혼자 움직이는 곳
+
+    [왜 CSS 로만 움직이나]
+        Gemini 호출은 서버(파이썬)를 몇 초 동안 붙잡아 둡니다.
+        그 사이에는 파이썬이 화면을 다시 그려줄 수 없습니다.
+        그래서 문구 교체·점·띠를 전부 CSS 애니메이션으로 만들었습니다.
+        서버가 멈춰 있어도 브라우저는 계속 움직입니다.
+        (문구를 바꾸려고 파이썬에서 sleep 하며 기다리는 일이 없습니다)
+
+    [구조]
+        ◆  네 사주팔자를 펼쳐보는 중이란다...      ← 한 자리에서 한 줄씩 교체
+           · · ·                                  ← 점이 하나씩 늘어남
+           ▁▁▁▁▁▁▁▁                               ← 얇은 띠가 좌우로 지나감
+
+    [가짜 진행률을 쓰지 않습니다]
+        몇 초 걸릴지 서버도 모르기 때문에 "80%" 같은 숫자를 쓰지 않습니다.
+        띠는 폭이 정해진 조각이 계속 지나가는 모양(indeterminate)입니다.
+
+    [문구가 몇 개든 됩니다]
+        @keyframes 이름 뒤에 문구 개수가 붙습니다 (halmae-phrase-5).
+        개수마다 '보이는 구간' 비율이 달라서, 개수별 keyframes 는
+        progress.py 가 그때그때 만들어 붙입니다. 색·서체·크기는 전부 여기 있습니다.
+    """
+    return f"""
+    /* ===== 로딩 판 ================================================= */
+    .halmae-loading {{
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.55rem;
+        margin: 1.6rem auto;
+        padding: 1.5rem 1.1rem 1.25rem 1.1rem;
+        max-width: 22rem;
+        background: linear-gradient(180deg,
+            {t['bg_panel']} 0%, {t['bg_base']} 100%);
+        border: 1px solid {t['line_gold']};
+        border-radius: {t['radius_card']};
+        box-shadow: inset 0 0 24px rgba(12, 6, 9, 0.7);
+    }}
+
+    /* 가운데 마름모 — 숨 쉬듯 아주 천천히 밝아졌다 어두워집니다 */
+    .halmae-loading-mark {{
+        font-size: 0.95rem;
+        line-height: 1;
+        color: {t['gold']};
+        animation: halmae-loading-breathe 2.4s ease-in-out infinite;
+    }}
+    @keyframes halmae-loading-breathe {{
+        0%, 100% {{
+            opacity: 0.45;
+            filter: drop-shadow(0 0 0 rgba(210, 166, 46, 0));
+        }}
+        50% {{
+            opacity: 1;
+            filter: drop-shadow(0 0 9px rgba(243, 216, 143, 0.55));
+        }}
+    }}
+
+    /* ===== 문구 자리 — 한 자리에서 한 줄씩 교체 ====================
+       문구를 위아래로 쌓지 않습니다. 겹쳐 두고(absolute) 번갈아 보입니다.
+       그래서 자리 높이를 미리 잡아둡니다 (두 줄까지). */
+    .halmae-loading-phrases {{
+        position: relative;
+        width: 100%;
+        min-height: 3.1rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }}
+    .halmae-loading-phrase {{
+        position: absolute;
+        left: 0;
+        right: 0;
+        margin: 0;
+        opacity: 0;
+        font-family: {t['font_title']};
+        font-size: 0.98rem;
+        line-height: 1.55;
+        letter-spacing: 0.01em;
+        text-align: center;
+        color: {t['gold_bright']};
+        word-break: keep-all;
+        overflow-wrap: anywhere;
+        animation-timing-function: linear;
+        animation-iteration-count: infinite;
+        animation-fill-mode: both;
+    }}
+
+    /* ===== 점이 하나씩 늘어납니다  ·  · ·  · · · ================== */
+    .halmae-loading-dots {{
+        display: flex;
+        gap: 0.42rem;
+        height: 0.42rem;
+        align-items: center;
+    }}
+    .halmae-loading-dots i {{
+        width: 0.24rem;
+        height: 0.24rem;
+        border-radius: {t['radius_pill']};
+        background: {t['gold']};
+        opacity: 0;
+        animation: halmae-loading-dot 1.6s steps(1, end) infinite;
+    }}
+    @keyframes halmae-loading-dot {{
+        0%   {{ opacity: 0; }}
+        20%  {{ opacity: 0.9; }}
+        99%  {{ opacity: 0.9; }}
+        100% {{ opacity: 0; }}
+    }}
+
+    /* ===== 얇은 금띠 — 폭이 정해진 조각이 계속 지나갑니다 ==========
+       실제 진행률이 아니라 '아직 하고 있다' 는 표시입니다. */
+    .halmae-loading-bar {{
+        position: relative;
+        width: 78%;
+        height: 1px;
+        margin-top: 0.15rem;
+        overflow: hidden;
+        background: {t['line']};
+    }}
+    .halmae-loading-bar span {{
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 34%;
+        height: 100%;
+        background: linear-gradient(90deg,
+            rgba(210, 166, 46, 0) 0%,
+            {t['gold_bright']} 50%,
+            rgba(210, 166, 46, 0) 100%);
+        animation: halmae-loading-sweep 1.9s ease-in-out infinite;
+    }}
+    @keyframes halmae-loading-sweep {{
+        0%   {{ transform: translateX(-110%); }}
+        100% {{ transform: translateX(330%); }}
+    }}
+
+    /* ===== 움직임을 싫어하는 사용자 ================================
+       OS 에서 '동작 줄이기' 를 켠 사람에게는 첫 문구만 가만히 보여줍니다.
+       (문구가 바뀌지 않아도 무엇을 하고 있는지는 읽을 수 있습니다) */
+    @media (prefers-reduced-motion: reduce) {{
+        .halmae-loading-mark,
+        .halmae-loading-dots i,
+        .halmae-loading-bar span {{
+            animation: none;
+        }}
+        .halmae-loading-dots i {{ opacity: 0.7; }}
+        .halmae-loading-phrase {{ animation: none; opacity: 0; }}
+        .halmae-loading-phrase:first-child {{ opacity: 1; }}
+    }}
+    """
+
+
 def _css_mobile(t: dict) -> str:
     """좁은 화면 손질 — 디자인은 그대로 두고 크기만 줄입니다.
 
@@ -1735,6 +1889,7 @@ def build_css() -> str:
         _css_feedback_premium(t),
         _css_notice(t),
         _css_dev(t),
+        _css_loading(t),
         # 좁은 화면 손질은 반드시 맨 뒤에. (같은 선택자를 이겨야 합니다)
         _css_mobile(t),
     ]

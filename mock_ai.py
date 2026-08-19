@@ -27,7 +27,10 @@ from halmae_ai import (
     YearFlowAnswer,
 )
 
-MOCK_DELAY_SECONDS = 0.4     # 로딩 화면이 보이는지 확인할 수 있게 아주 잠깐만 쉽니다
+# Mock 응답에는 일부러 쉬는 시간을 두지 않습니다.
+#     예전에는 MOCK_DELAY_SECONDS = 0.4 로 잠깐 쉬어서 로딩 화면을 확인했는데,
+#     로딩 문구가 브라우저(CSS) 쪽에서 도는 지금은 쉴 이유가 없습니다.
+#     로딩 화면을 눈으로 보고 싶으면 streamlit run progress.py 를 쓰세요.
 
 
 # ===============================================================

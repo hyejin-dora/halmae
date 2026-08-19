@@ -75,6 +75,37 @@ def _source_of(node: ast.AST) -> str:
     return ast.get_source_segment(APP_SOURCE, node) or ""
 
 
+def _snippet(text: str, term: str, span: int = 30) -> str:
+    """검사에 걸린 자리를 앞뒤로 조금 붙여 보여줍니다. (없으면 빈 글자)"""
+    at = text.find(term)
+    if at < 0:
+        return ""
+    return "…" + text[max(0, at - span):at + len(term) + span] + "…"
+
+
+def _consent_label_text() -> str:
+    """동의 체크박스에 실제로 적히는 글.
+
+    st.checkbox("...", key="in_consent") 의 첫 인자를 코드에서 꺼냅니다.
+    문구가 여러 줄로 나뉘어 있어도(문자열 이어붙이기) 하나로 합쳐 돌려줍니다.
+    """
+    render_input = _func("render_input")
+    if render_input is None:
+        return ""
+    for node in ast.walk(render_input):
+        if not isinstance(node, ast.Call) or _call_name(node) != "st.checkbox":
+            continue
+        keys = [kw for kw in node.keywords
+                if kw.arg == "key" and isinstance(kw.value, ast.Constant)
+                and kw.value.value == "in_consent"]
+        if keys and node.args:
+            try:
+                return str(ast.literal_eval(node.args[0]))
+            except Exception:
+                return _source_of(node.args[0])
+    return ""
+
+
 def _calls(tree: ast.AST):
     """트리 안의 모든 함수 호출."""
     return [n for n in ast.walk(tree) if isinstance(n, ast.Call)]
@@ -452,7 +483,8 @@ def check_privacy_notice() -> None:
         ("출생지역", "출생지역"),
         ("사주", "사주 계산에 쓴다"),
         ("별자리", "별자리 계산에 쓴다"),
-        ("Gemini", "AI 로 전달될 수 있다"),
+        ("외부", "우리 밖으로 나간다"),
+        ("전달될 수 있", "전달된다는 사실"),
         ("고민", "고민 내용도 전달된다"),
         ("남기지 않으마", "원문은 저장하지 않는다"),
     ):
@@ -460,6 +492,19 @@ def check_privacy_notice() -> None:
 
     check("안내가 길지 않다 (항목 5개 이하)", notice.count("<li>") <= 5,
           f"{notice.count('<li>')}줄")
+
+    # 사용자 화면에는 기술 용어를 쓰지 않습니다.
+    #     "무엇에 쓰이는지" 와 "밖으로 나갈 수 있다" 는 사실은 위에서 이미
+    #     확인했습니다. 여기서는 그 사실을 '어떤 기술로' 하는지가 새어나오지
+    #     않는지만 봅니다. 사용자에게 필요한 정보가 아니고, 서비스가 쓰는
+    #     모델이 바뀌면 문구가 거짓이 되기 때문입니다.
+    #     (개발자 화면 · 로그 · 주석에는 그대로 적어둡니다 — USE_DEV_MODE)
+    consent_label = _consent_label_text()
+    for term in ("Gemini", "API", "AI", "인공지능"):
+        check(f"안내에 기술 용어 '{term}' 가 없다", term not in notice,
+              _snippet(notice, term))
+        check(f"동의 문구에 기술 용어 '{term}' 가 없다",
+              term not in consent_label, _snippet(consent_label, term))
 
     render_input = _source_of(_func("render_input") or ast.Module())
     check("안내가 제출 버튼보다 먼저 나온다",
