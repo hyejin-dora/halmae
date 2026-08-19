@@ -658,10 +658,15 @@ def get_client(api_key: str | None = None) -> genai.Client:
 
     key = (api_key or get_secret("GEMINI_API_KEY")).strip()
     if not key:
+        # 사용자에게는 무엇을 하면 되는지만 알려줍니다.
+        # (환경변수 이름과 설정 위치는 개발자가 볼 로그에만 적습니다)
+        logger.error(
+            "GEMINI_API_KEY 가 없습니다 — 내 컴퓨터는 환경변수로, "
+            "Streamlit Cloud 는 Settings → Secrets 에 넣어주세요."
+        )
         raise HalmaeError(
-            "Gemini API 키가 설정되어 있지 않아요.\n"
-            "내 컴퓨터에서는 `export GEMINI_API_KEY=\"발급받은_키\"`,\n"
-            "Streamlit Cloud 에서는 Settings → Secrets 에 GEMINI_API_KEY 를 넣어주세요."
+            "할매가 지금은 답을 할 수 없는 상태예요. "
+            "잠시 뒤에 다시 시도해주세요."
         )
     return genai.Client(api_key=key)
 
@@ -796,9 +801,14 @@ def ask_halmae(
             ) from exc
         # 키가 틀리면 보통 400(API key not valid) 또는 401/403으로 옵니다.
         if exc.code in (401, 403) or "api key" in str(exc).lower():
+            # 사용자는 API 키를 모릅니다. 원인은 개발 로그에만 남깁니다.
+            logger.error(
+                "Gemini 인증 실패 (코드 %s) — GEMINI_API_KEY 값과 권한을 확인하세요.",
+                exc.code,
+            )
             raise HalmaeError(
-                "Gemini API 키가 올바르지 않거나 권한이 없어요. "
-                "GEMINI_API_KEY 값을 다시 확인해주세요."
+                "할매가 지금은 답을 할 수 없는 상태예요. "
+                "잠시 뒤에 다시 시도해주세요."
             ) from exc
         raise HalmaeError(
             f"요청을 보내는 중 문제가 생겼어요. (오류 코드 {exc.code})"
@@ -1039,9 +1049,14 @@ def ask_year_card(
                 "1~2분 뒤에 다시 시도해주세요."
             ) from exc
         if exc.code in (401, 403) or "api key" in str(exc).lower():
+            # 사용자는 API 키를 모릅니다. 원인은 개발 로그에만 남깁니다.
+            logger.error(
+                "Gemini 인증 실패 (코드 %s) — GEMINI_API_KEY 값과 권한을 확인하세요.",
+                exc.code,
+            )
             raise HalmaeError(
-                "Gemini API 키가 올바르지 않거나 권한이 없어요. "
-                "GEMINI_API_KEY 값을 다시 확인해주세요."
+                "할매가 지금은 답을 할 수 없는 상태예요. "
+                "잠시 뒤에 다시 시도해주세요."
             ) from exc
         raise HalmaeError(
             f"요청을 보내는 중 문제가 생겼어요. (오류 코드 {exc.code})"

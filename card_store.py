@@ -181,16 +181,29 @@ CARD_TEXT_FIELDS = ("title", "keyword", "message", "basis", "caution")
 CARD_LIST_FIELDS = ("actions",)
 
 
+# 부르는 말에 붙는 조사 — "혜진아" / "혜진야" / "혜진이"
+_VOCATIVE = "[아야이](?![가-힣])"
+
+
 def _scrub_name_in_text(text: str, name: str) -> str:
-    """글 한 덩이에서 이름을 지웁니다."""
+    """글 한 덩이에서 이름을 지웁니다.
+
+    부르는 말('안혜진아')을 먼저 통째로 지웁니다.
+    이름만 먼저 지우면 조사가 남아 "너아, 올해는…" 같은 문장이 됩니다.
+    """
     if not text or not name:
         return text
-    cleaned = re.sub(re.escape(name), NAME_REPLACEMENT, text)
+    # 1) 성을 포함한 부르는 말 — "안혜진아" → "너"
+    cleaned = re.sub(re.escape(name) + _VOCATIVE, NAME_REPLACEMENT, text)
+    # 2) 성을 포함한 이름 — "안혜진" → "너"
+    cleaned = re.sub(re.escape(name), NAME_REPLACEMENT, cleaned)
     if len(name) >= 3:                       # 성(1자) + 이름(2자 이상)으로 봅니다
         given = name[1:]
-        # 부르는 말일 때만 — "혜진아" / "혜진이" / "혜진야"
+        # 3) 이름만 부르는 말일 때 — "혜진아" → "너"
+        #    ('지원' 처럼 흔한 낱말과 겹칠 때 멀쩡한 문장을 망가뜨리지 않도록
+        #     호격 조사가 붙은 경우로 좁힙니다)
         cleaned = re.sub(
-            re.escape(given) + "[아야이](?![가-힣])", NAME_REPLACEMENT, cleaned
+            re.escape(given) + _VOCATIVE, NAME_REPLACEMENT, cleaned
         )
     return cleaned
 
