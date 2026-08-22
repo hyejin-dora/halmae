@@ -38,7 +38,7 @@ from halmae_ai import (
 #     계산이 안 된 경우에도 화면이 깨지지 않도록 기본값을 둡니다.
 # ===============================================================
 def _facts(answers: dict | None, saju: dict | None, astro: dict | None) -> dict:
-    from halmae_ai import relationship_context
+    from halmae_ai import career_context, relationship_context
 
     answers = answers or {}
     name = answers.get("이름") or "너"
@@ -46,6 +46,8 @@ def _facts(answers: dict | None, saju: dict | None, astro: dict | None) -> dict:
     # 관계 상태 — '연애·관계' 를 고른 사람에게만 값이 있습니다.
     # Mock 에서도 이 값을 실제로 써야, 개발 중에 화면이 진짜와 달라지지 않습니다.
     relationship = relationship_context(answers)
+    # 커리어 상황 — '일·커리어' 를 고른 사람에게만 값이 있습니다. (같은 이유)
+    career = career_context(answers)
 
     if saju:
         pillars = saju["기둥"]
@@ -85,6 +87,7 @@ def _facts(answers: dict | None, saju: dict | None, astro: dict | None) -> dict:
         "이름": name,
         "고민": concern,
         "관계": relationship,
+        "커리어": career,
         **return_saju,
         **return_astro,
     }
@@ -135,6 +138,8 @@ def mock_step1(answers=None, saju=None, astro=None) -> Step1Answer:
         concern_reading=(
             (f"네가 고른 관계 상태({f['관계']})에 맞춰 짚어주마. "
              if f["관계"] else "")
+            + (f"네가 고른 지금 상황({f['커리어']})에 맞춰 짚어주마. "
+               if f["커리어"] else "")
             + f"{f['이름']}아, 네 {f['고민']}이 지금 삐걱대는 건 "
             "네가 게을러서가 아니란다. "
             "네 사주는 짊어지고 버티는 데 최적화되어 있는데, 네 별자리는 "

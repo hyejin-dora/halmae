@@ -13,7 +13,15 @@
     session_id  : 사용자를 알아볼 수 없는 무작위 UUID (브라우저 탭을 닫으면 끝)
     timestamp   : 기록 시각 (UTC, ISO 8601)
     event_name  : 어떤 일이 일어났는지
-    concern     : 고민 분야 (연애 / 취업·커리어 … 같은 미리 정해진 선택지)
+    concern     : 고민 분야 (연애·관계 / 일·커리어 … 같은 미리 정해진 선택지)
+
+                  [이름이 바뀐 칸이 하나 있습니다]
+                      "취업/커리어"  →  "일·커리어"  (2026-08)
+                  예전에 쌓인 줄에는 옛 이름이 그대로 남아 있습니다.
+                  이 칸은 값으로 묶어 세는 곳이 없어서(깔때기는 event_name
+                  으로만 셉니다) 지표가 어긋나지는 않습니다.
+                  두 이름을 한 칸으로 보고 싶으면
+                  halmae_ai.normalize_concern() 을 거쳐서 세면 됩니다.
     model       : 그때 쓰던 Gemini 모델 이름
     step        : 그때의 단계 번호 (1 / 2 / 3)
 
@@ -98,6 +106,16 @@ CARD_STEPS = [
     ("card_view", "올해의 카드 조회"),
 ]
 
+# 결과 저장(PDF/인쇄) 버튼. 결과를 다 보고 나서 누르는 곁가지라 따로 셉니다.
+#
+# [무엇이 남고 무엇이 남지 않는가]
+#     남는 것   "누군가 결과 저장을 눌렀다" 는 사실 한 줄뿐입니다.
+#     안 남는 것 이름 · 생년월일 · 출생시간 · 출생지역 · 결과 내용 전부.
+#     PDF 는 사용자 브라우저에서 만들어지고, 서버로 올라오지 않습니다.
+RESULT_STEPS = [
+    ("result_download_click", "결과 저장 클릭"),
+]
+
 # 피드백도 Step 3 화면에 함께 뜨는 곁가지라 따로 셉니다.
 FEEDBACK_STEPS = [
     ("feedback_view", "피드백 영역 노출"),
@@ -109,7 +127,7 @@ EVENT_NAMES = [
     name
     for name, _ in (
         FUNNEL_STEPS + INTENT_STEPS + YEAR_FLOW_STEPS
-        + CARD_STEPS + FEEDBACK_STEPS
+        + CARD_STEPS + RESULT_STEPS + FEEDBACK_STEPS
     )
 ]
 
@@ -764,6 +782,33 @@ def card_summary(store: EventStore | None = None) -> dict:
         "카드 클릭률": _rate(counts["card_click"], counts["step3_view"]),
         # 누른 사람 중 몇 %가 카드를 실제로 봤나 (실패하면 낮아집니다)
         "카드 완료율": _rate(counts["card_view"], counts["card_click"]),
+    }
+
+
+def download_summary(store: EventStore | None = None) -> dict:
+    """결과 저장(PDF/인쇄) 지표.
+
+    Step 3 까지 본 사람 중 몇 %가 결과를 저장했는지를 봅니다.
+    "결과가 길어서 나중에 다시 보고 싶다" 는 요구가 실제로 있었는지 확인하는 값입니다.
+
+    저장한 결과의 내용은 어디에도 남지 않습니다 — 누른 횟수만 셉니다.
+    """
+    rows = (store or _store).read_all()
+
+    wanted = ["step3_view", "result_download_click"]
+    sessions: dict[str, set] = {name: set() for name in wanted}
+    for row in rows:
+        session_id = (row.get("session_id") or "").strip()
+        event_name = (row.get("event_name") or "").strip()
+        if session_id and event_name in sessions:
+            sessions[event_name].add(session_id)
+
+    counts = {name: len(sessions[name]) for name in wanted}
+    return {
+        "counts": counts,
+        "결과 저장률": _rate(
+            counts["result_download_click"], counts["step3_view"]
+        ),
     }
 
 

@@ -523,8 +523,20 @@ def check_disclaimer() -> None:
         check(f"고지에 '{word}' 가 있다", word in text)
 
     result = _source_of(_func("render_result") or ast.Module())
-    check("결과 화면 맨 아래에 붙는다",
-          result.rstrip().endswith("render_disclaimer()"))
+    # 고지는 '흐름에 놓인 마지막 내용' 이어야 합니다.
+    #     그 뒤에 오는 render_save_button() 은 position:fixed 로 떠 있는
+    #     버튼이라 문서 흐름에서 고지 아래에 끼어들지 않습니다.
+    #     (그래서 소스 순서로는 마지막이지만 화면에서는 겹치지 않습니다)
+    tail = result.rstrip()
+    after_disclaimer = tail.split("render_disclaimer()")[-1]
+    check("결과 화면 맨 아래에 붙는다 (뒤에는 떠 있는 저장 버튼만)",
+          "render_disclaimer()" in tail
+          and "render_save_button()" in after_disclaimer
+          and "st.markdown" not in after_disclaimer,
+          after_disclaimer.strip()[:80])
+    check("저장 버튼은 화면에 떠 있다 (흐름에 끼어들지 않는다)",
+          "position: fixed" in theme.build_css()
+          and ".st-key-result_save" in theme.build_css())
     check("작게 보이도록 전용 스타일을 쓴다",
           ".halmae-disclaimer" in theme.build_css()
           and "0.72rem" in theme.build_css())
@@ -546,6 +558,9 @@ ACTION_EVENTS = {
     # 올해의 카드 클릭은 예전부터 card_click 한 이름만 씁니다.
     # (year_card_click 을 새로 만들면 같은 행동이 두 이름으로 갈라집니다)
     "card_click", "premium_click",
+    # 결과 저장(PDF/인쇄) 버튼. 누를 때마다 세는 클릭 이벤트입니다.
+    # (저장한 결과의 내용은 어디에도 남지 않습니다 — 누른 횟수만)
+    "result_download_click",
     "purchase_intent_yes", "purchase_intent_no",
     "feedback_positive", "feedback_negative",
 }

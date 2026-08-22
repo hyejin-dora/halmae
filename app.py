@@ -28,6 +28,7 @@ import logging
 from datetime import date, time, timedelta
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 import analytics
 import astrology
@@ -37,7 +38,7 @@ import db
 import perf
 import progress
 import theme
-from astrology import AstrologyError, compute_astrology
+from astrology import AstrologyError, compute_astrology, geocode_place
 from config import USE_DEV_MODE, USE_MOCK_AI
 from daeun import (
     GENDER_SKIPPED_FOR_PROMPT,
@@ -56,6 +57,11 @@ from halmae_ai import (
     MODEL_STAGE,
     NEXT_BUTTON_LABELS,
     PROD_MODEL,
+    CAREER_CONCERN,
+    CAREER_CONTEXT_KEY,
+    CAREER_OPTIONS,
+    CAREER_QUESTION,
+    CAREER_UNKNOWN,
     RELATIONSHIP_CONCERN,
     RELATIONSHIP_CONTEXT_KEY,
     RELATIONSHIP_OPTIONS,
@@ -230,6 +236,12 @@ if "premium_open" not in st.session_state:
 
 if "purchase_intent" not in st.session_state:
     st.session_state.purchase_intent = None
+
+# --- 결과 저장 (PDF) -------------------------------------------
+#     저장 버튼을 누른 rerun 에서만 True 가 되고, 인쇄 창을 연 뒤 곧바로
+#     False 로 되돌립니다. 그래야 다음 rerun 에서 창이 또 열리지 않습니다.
+if "print_requested" not in st.session_state:
+    st.session_state.print_requested = False
 
 # --- 올해의 카드 -----------------------------------------------
 #     Step 1~3 이야기를 이어받아 올해를 한 장으로 압축한 결과물입니다.
@@ -441,14 +453,51 @@ def cached_calendar(birth_date, calendar_type, leap_month):
 
 @st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS,
                max_entries=CACHE_MAX_ENTRIES)
-def cached_saju(birth_date, birth_time, calendar_type, leap_month, birth_place):
-    """사주 네 기둥 · 오행 (같은 출생정보면 다시 계산하지 않습니다)."""
+def cached_longitude(birth_place):
+    """출생지 경도만 따로 꺼냅니다. 못 찾으면 None.
+
+    [왜 따로 부르나]
+        시주는 출생지 경도로 시간을 보정해야 만세력과 맞습니다(지방평균태양시).
+        그런데 사주 계산이 점성술 계산보다 먼저 돌아가서, 점성술이 찾아둔
+        좌표를 기다릴 수가 없습니다. 그래서 여기서 좌표만 미리 꺼냅니다.
+
+        geocode_place 는 같은 지역이면 인터넷에 다시 나가지 않으므로
+        (astrology 쪽 캐시 + 여기 캐시) 두 번 불러도 느려지지 않습니다.
+
+    [실패해도 사주는 나옵니다]
+        경도를 못 찾으면 None 을 돌려주고, saju.py 가 지역명 예비 표로,
+        그것도 없으면 표준시로 물러납니다. 여기서 예외를 위로 올리지 않습니다.
+
+    [개인정보]
+        검색어(출생지역 원문)와 좌표를 로그에 적지 않습니다.
+    """
+    place = (birth_place or "").strip()
+    if not place:
+        return None
+    try:
+        return float(geocode_place(place)["경도"])
+    except Exception:
+        # 못 찾은 것 자체는 정상 흐름입니다. 어느 지역이었는지는 남기지 않습니다.
+        log.info("출생지 경도를 찾지 못해 예비 표로 넘깁니다")
+        return None
+
+
+@st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS,
+               max_entries=CACHE_MAX_ENTRIES)
+def cached_saju(birth_date, birth_time, calendar_type, leap_month, birth_place,
+                birth_longitude):
+    """사주 네 기둥 · 오행 (같은 출생정보면 다시 계산하지 않습니다).
+
+    birth_longitude 는 시주(시지·시간 천간)에만 쓰입니다.
+    년주·월주·일주는 이 값과 상관없이 같은 결과가 나옵니다.
+    """
     return compute_saju(
         birth_date=birth_date,
         birth_time=birth_time,
         calendar_type=calendar_type,
         leap_month=leap_month,
         birth_place=birth_place,
+        birth_longitude=birth_longitude,
     )
 
 
@@ -537,8 +586,11 @@ def compute_saju_info(answers: dict) -> None:
     st.session_state.saju_info = None
     st.session_state.saju_error = None
     try:
+        args = _birth_args(answers)
+        # 시주를 출생지 기준으로 보정하기 위한 경도. 못 찾으면 None 입니다.
+        longitude = cached_longitude(args[4])
         with perf.stage("saju_calculation", st.session_state.perf):
-            st.session_state.saju_info = cached_saju(*_birth_args(answers))
+            st.session_state.saju_info = cached_saju(*args, longitude)
     except CalendarError as exc:
         log.warning("사주 계산 실패 (안내함) — %s", exc)
         st.session_state.saju_error = str(exc)
@@ -645,7 +697,7 @@ def clear_calculations() -> None:
     st.session_state.perf = {}
 
 
-def prepare_calculations(answers: dict) -> None:
+def prepare_calculations(answers: dict, loading_slot=None) -> None:
     """할매에게 묻기 전에 필요한 계산을 모두 준비합니다.
 
     입력이 그대로면 아무것도 다시 계산하지 않습니다.
@@ -653,6 +705,12 @@ def prepare_calculations(answers: dict) -> None:
 
     계산 순서와 로딩 문구가 서로 맞게 붙어 있습니다.
         ① 사주팔자 → ② 별자리 → ③ 대운
+
+    loading_slot : 로딩 판을 띄울 자리(st.empty()).
+        '할매에게 물어보기' 버튼은 첫 화면 맨 아래에 있어서, 로딩 판을
+        누른 뒤에 만들면 버튼 아래 — 즉 화면 밖 — 에 생깁니다.
+        모바일에서는 아무 변화가 없는 것처럼 보입니다.
+        그래서 버튼 바로 '위' 에 미리 잡아둔 자리를 받아서 거기에 띄웁니다.
     """
     fingerprint = input_fingerprint(answers)
     same_input = fingerprint == st.session_state.calc_fingerprint
@@ -667,7 +725,9 @@ def prepare_calculations(answers: dict) -> None:
     clear_calculations()
     st.session_state.calc_fingerprint = fingerprint
 
-    with progress.steps(progress.CALC_STAGES, progress.CALC_DONE) as stage:
+    with progress.steps(
+        progress.CALC_STAGES, progress.CALC_DONE, slot=loading_slot
+    ) as stage:
         compute_calendar(answers)
         compute_saju_info(answers)
         stage.next()
@@ -686,8 +746,13 @@ def go_to(page_name: str) -> None:
 #     "연애" 를 "연애·관계" 로 넓혔습니다. 솔로만의 이야기가 아니라
 #     사귀는 중·기혼까지 모두 담는 칸이라는 뜻입니다.
 #     (이 칸을 고른 사람에게만 관계 상태를 한 번 더 묻습니다)
+#     "취업/커리어" 를 "일·커리어" 로 넓혔습니다. 취업 준비만의 칸이 아니라
+#     재직 중·이직 고민·직무 전환까지 모두 담는 칸이라는 뜻입니다.
+#     (이 칸을 고른 사람에게만 커리어 상황을 한 번 더 묻습니다.
+#      예전 이름 "취업/커리어" 로 저장된 값도 halmae_ai.normalize_concern 이
+#      같은 칸으로 알아봅니다 — 예전 기록과 analytics 가 깨지지 않게)
 CONCERN_OPTIONS = [
-    RELATIONSHIP_CONCERN, "취업/커리어", "돈", "인간관계", "삶의 방향", "기타",
+    RELATIONSHIP_CONCERN, CAREER_CONCERN, "돈", "인간관계", "삶의 방향", "기타",
 ]
 
 # 성별 선택칸 밑에 붙는 한 줄 안내.
@@ -704,6 +769,12 @@ GENDER_FIELD_NOTE = (
 RELATIONSHIP_FIELD_NOTE = (
     "할매가 상황에 맞게 짚어주려고 여쭙는단다. "
     "고르지 않으면 관계 상태는 넘겨짚지 않아요."
+)
+
+# 커리어 상황 선택칸 밑에 붙는 한 줄 안내. (관계 상태와 같은 결)
+CAREER_FIELD_NOTE = (
+    "취업 준비 중인지 이미 일하고 있는지에 따라 할 말이 달라져서 여쭙는단다. "
+    "고르지 않으면 지금 상황은 넘겨짚지 않아요."
 )
 
 
@@ -944,6 +1015,28 @@ def render_input() -> None:
             unsafe_allow_html=True,
         )
 
+    # --- 8-3. 커리어 상황 (일·커리어를 고른 경우에만) ---------------
+    #     이걸 묻지 않으면 할매가 사용자를 취준생이라고 짐작하고
+    #     "이력서를 고쳐 써라" 같은 조언을 합니다. 이미 회사에 다니는
+    #     사람에게는 빗나간 말이 됩니다.
+    #
+    #     [처음에 아무것도 고르지 않은 상태로 둡니다 — index=None]
+    #     첫 항목(첫 취업·구직 중)이 미리 골라져 있으면, 그냥 지나친 사람이
+    #     취준생으로 기록됩니다. 짐작하지 않는 것이 이 기능의 전부라
+    #     비워두고, 비운 채 제출하면 '말하고 싶지 않아요' 로 봅니다.
+    career_context = None
+    if concern == CAREER_CONCERN:
+        career_context = st.radio(
+            CAREER_QUESTION,
+            options=CAREER_OPTIONS,
+            index=None,
+            key="in_career",
+        )
+        st.markdown(
+            f'<p class="halmae-fieldnote">{CAREER_FIELD_NOTE}</p>',
+            unsafe_allow_html=True,
+        )
+
     # --- 9. 추가 질문 --------------------------------------------
     extra_question = st.text_area(
         "추가로 궁금한 내용",
@@ -967,6 +1060,24 @@ def render_input() -> None:
     if not consent:
         st.caption("위 상자에 표시를 해주어야 할매가 이야기를 시작할 수 있단다.")
 
+    # --- 11-1. 로딩 판이 뜰 자리 (버튼 '위' 입니다) -----------------
+    #     [왜 버튼 위인가]
+    #         이 버튼은 첫 화면 맨 아래에 있습니다. 예전에는 버튼을 누른
+    #         뒤에 로딩 판을 만들었는데, 그러면 판이 버튼 '아래' 에 생깁니다.
+    #         모바일에서는 그 자리가 화면 밖이라, 사용자는 아무 일도 일어나지
+    #         않은 것처럼 느꼈습니다. ("눌렸나? 멈췄나?")
+    #
+    #         자리를 버튼 위에 미리 잡아두면, 누른 그 자리에서 바로
+    #         로딩 문구가 시작됩니다. 스크롤을 옮기지 않아도 보입니다.
+    #
+    #     [지금은 비어 있습니다]
+    #         st.empty() 는 자리만 잡아둡니다. 아무것도 안 그린 상태에서는
+    #         높이가 0 이라, 버튼을 누르기 전 화면은 예전과 똑같습니다.
+    #
+    #     Step2 · Step3 · 올해의 흐름 · 올해의 카드는 손대지 않았습니다.
+    #     그 버튼들은 페이지 중간에 있어서 로딩 판이 이미 눈에 보입니다.
+    loading_slot = st.empty()
+
     if st.button(
         "할매에게 물어보기",
         type="primary",
@@ -974,7 +1085,9 @@ def render_input() -> None:
         disabled=not consent,
     ):
         if not name.strip():
-            st.warning("이름을 알려주렴. 그래야 불러줄 수 있지 않겠니.")
+            # 이 안내도 버튼 위 자리에 띄웁니다. 버튼 아래에 뜨면
+            # 모바일에서는 화면 밖이라 "왜 안 되지?" 로 이어집니다.
+            loading_slot.warning("이름을 알려주렴. 그래야 불러줄 수 있지 않겠니.")
         else:
             # 입력값을 한 곳에 모아 Session State에 저장합니다.
             # (위젯 값은 화면이 바뀌면 사라질 수 있어서, 따로 복사해 둡니다.)
@@ -995,6 +1108,12 @@ def render_input() -> None:
                     (relationship_context or RELATIONSHIP_UNKNOWN)
                     if concern == RELATIONSHIP_CONCERN else None
                 ),
+                # 커리어 상황도 같은 방식입니다 — '일·커리어' 를 고른
+                # 경우에만 담고, 다른 고민으로 바꿔 제출하면 담지 않습니다.
+                CAREER_CONTEXT_KEY: (
+                    (career_context or CAREER_UNKNOWN)
+                    if concern == CAREER_CONCERN else None
+                ),
                 "추가 질문": extra_question.strip(),
             }
             # 입력을 마치고 제출한 순간
@@ -1004,7 +1123,9 @@ def render_input() -> None:
             # 생년월일 → 양력·음력 변환, 사주 네 기둥, 별자리, 대운·세운 계산
             # (아직 Gemini에는 보내지 않습니다)
             # 입력이 그대로면 여기서 아무것도 다시 계산하지 않습니다.
-            prepare_calculations(st.session_state.answers)
+            #
+            # 로딩 판은 위에서 잡아둔 자리(버튼 바로 위)에 뜹니다.
+            prepare_calculations(st.session_state.answers, loading_slot)
 
             # 새로 물어보는 것이므로 이전 대화는 비우고 1단계부터 시작합니다.
             reset_conversation()
@@ -1248,6 +1369,11 @@ def render_myeongsik() -> None:
     foot = f'오행은 {_escape(facts["오행 기준"])} 기준으로 셌어요.'
     if not facts["시주 계산 여부"]:
         foot += f' {_escape(facts["시주 제외 사유"])}.'
+    elif facts.get("시주 기준"):
+        # 시주를 어떤 시각 기준으로 잡았는지 밝혀둡니다.
+        #     시계 시각 그대로 쓰는 만세력과 시주가 다를 수 있어서,
+        #     "왜 다르지?" 하고 앱을 의심하기 전에 이유를 볼 수 있게 합니다.
+        foot += f' 시주는 {_escape(facts["시주 기준"])} 기준이에요.'
 
     _card(
         f'<div class="halmae-myeongsik-row">{"".join(pillar_cells)}</div>'
@@ -2125,12 +2251,99 @@ def render_premium() -> None:
     st.caption("※ 결제는 이루어지지 않았습니다. 베타 테스트 응답만 기록됐어요.")
 
 
+# ===============================================================
+#  결과 저장 (PDF) — 브라우저의 인쇄 기능을 그대로 씁니다
+#
+#  [왜 새 라이브러리를 넣지 않았나]
+#      reportlab · weasyprint · pdfkit 같은 것을 넣으면 화면과 PDF 를
+#      두 번 만들어야 하고(같은 결과를 두 곳에서 그리게 됩니다),
+#      한글 글꼴 파일을 따로 안고 다녀야 하고, 배포 용량도 늘어납니다.
+#      브라우저는 이미 "인쇄 → PDF로 저장" 을 할 줄 압니다.
+#      우리가 할 일은 인쇄용 CSS 를 잘 짜두는 것뿐입니다. (theme._css_print)
+#
+#  [개인정보]
+#      PDF 는 사용자 브라우저에서 만들어집니다. 서버로 올라오지 않고,
+#      Supabase 에도 저장하지 않습니다. 남는 것은 익명 이벤트 한 줄
+#      (result_download_click) 뿐입니다 — 결과 내용은 들어가지 않습니다.
+# ===============================================================
+# 인쇄 창을 여는 스크립트.
+#     값을 끼워 넣는 곳이 한 군데도 없는 고정 문자열입니다.
+#     (사용자 입력이 스크립트로 들어갈 통로가 아예 없습니다)
+#
+#     st.components.v1.html 은 내용을 iframe 안에서 돌립니다.
+#     그래서 부모 창(실제 결과 화면)을 인쇄하려면 window.parent 를 부릅니다.
+#     혹시 막혀 있으면 iframe 자기 자신을 인쇄하지 않고 조용히 넘어갑니다 —
+#     빈 종이가 나오는 것보다 아무 일도 안 일어나는 편이 낫습니다.
+_PRINT_SCRIPT = """
+<script>
+(function () {
+  try {
+    var target = window.parent && window.parent !== window
+      ? window.parent : window;
+    // 인쇄용 CSS 가 적용될 틈을 준 뒤 창을 엽니다.
+    setTimeout(function () {
+      try { target.focus(); } catch (e) {}
+      target.print();
+    }, 120);
+  } catch (e) {
+    /* 부모 창에 손을 못 대는 환경 — 아무것도 하지 않습니다 */
+  }
+})();
+</script>
+"""
+
+
+def render_print_header() -> None:
+    """인쇄물 맨 위에만 나오는 표지 줄. 화면에서는 보이지 않습니다.
+
+    (.halmae-print-only 는 화면에서 display:none, 인쇄에서 display:block)
+    이름·생년월일은 넣지 않습니다 — 종이에 남을 이유가 없습니다.
+    """
+    st.markdown(
+        '<div class="halmae-print-only">'
+        '<p class="halmae-print-title">할매 결과 리포트</p>'
+        '<p class="halmae-print-note">'
+        '사주 · 별자리로 짚어본 결과입니다. '
+        '재미와 자기성찰을 위한 것이며, 의료 · 법률 · 투자 판단의 '
+        '근거로 삼지 마세요.'
+        '</p>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_save_button() -> None:
+    """화면 우측 아래에 뜨는 작은 저장 버튼. (결과가 다 나온 뒤에만)
+
+    누르면 브라우저 인쇄 창이 열리고, 거기서 'PDF로 저장' 을 고릅니다.
+    버튼 자체는 인쇄물에 나오지 않습니다. (.stButton 은 print 에서 숨김)
+    """
+    # 떠 있는 버튼이 마지막 줄을 덮지 않도록 빈 자리를 먼저 둡니다.
+    st.markdown('<div class="halmae-save-gap"></div>', unsafe_allow_html=True)
+
+    # 버튼에는 긴 글을 넣지 않습니다. 무엇을 하는 버튼인지는 tooltip 으로.
+    with st.container(key="result_save"):
+        if st.button("⇩", key="result_save_btn", help="결과 저장"):
+            # 익명 이벤트 한 줄. 결과 내용은 들어가지 않습니다.
+            track_action("result_download_click")
+            st.session_state.print_requested = True
+
+    # 버튼을 누른 그 화면에서 인쇄 창을 엽니다.
+    # (한 번 열고 나면 표시를 지워, 다음 rerun 에서 또 열리지 않게 합니다)
+    if st.session_state.get("print_requested"):
+        st.session_state.print_requested = False
+        components.html(_PRINT_SCRIPT, height=0)
+
+
 def render_result() -> None:
     answers = st.session_state.answers
 
     # 입력값 없이 이 화면에 들어온 경우(새로고침 등)에는 입력 화면으로 돌려보냅니다.
     if not answers:
         go_to("input")
+
+    # 인쇄물에만 나오는 표지 줄. 화면에서는 보이지 않습니다.
+    render_print_header()
 
     st.markdown(theme.poster_title(small=True), unsafe_allow_html=True)
     st.markdown(theme.rule(), unsafe_allow_html=True)
@@ -2203,10 +2416,14 @@ def render_result() -> None:
             if render_year_flow():
                 st.markdown(theme.separator(), unsafe_allow_html=True)
                 render_year_card()
-            st.markdown(theme.separator(), unsafe_allow_html=True)
-            render_feedback()
-            st.markdown(theme.separator(), unsafe_allow_html=True)
-            render_premium()
+            # 피드백과 Premium 은 인쇄물에 넣지 않습니다.
+            # (halmae_noprint_* 상자는 theme._css_print 가 숨깁니다)
+            with st.container(key="halmae_noprint_feedback"):
+                st.markdown(theme.separator(), unsafe_allow_html=True)
+                render_feedback()
+            with st.container(key="halmae_noprint_premium"):
+                st.markdown(theme.separator(), unsafe_allow_html=True)
+                render_premium()
 
     # --- 2. 개발자용: 보낸 값과 프롬프트 확인 -----------------------
     #     여기에는 이름·생년월일·출생시간·출생지역·추가 질문 원문과
@@ -2287,18 +2504,31 @@ def render_result() -> None:
             )
             st.code(perf.format_summary(st.session_state.perf), language="text")
 
-    st.markdown("<div style='height: 1rem;'></div>", unsafe_allow_html=True)
+    # 아래 이동 버튼들도 인쇄물에는 넣지 않습니다.
+    with st.container(key="halmae_noprint_nav"):
+        st.markdown(
+            "<div style='height: 1rem;'></div>", unsafe_allow_html=True
+        )
 
-    if st.button("다시 입력하기", type="primary", key="result_again", width="stretch"):
-        reset_conversation()
-        go_to("input")
+        if st.button("다시 입력하기", type="primary", key="result_again",
+                     width="stretch"):
+            reset_conversation()
+            go_to("input")
 
-    if st.button("← 처음으로", type="secondary", key="result_home", width="stretch"):
-        reset_conversation()
-        go_to("intro")
+        if st.button("← 처음으로", type="secondary", key="result_home",
+                     width="stretch"):
+            reset_conversation()
+            go_to("intro")
 
     # 화면 맨 아래 · 이 서비스가 어떤 성격인지 조용히 밝혀둡니다.
+    # (인쇄물에도 남깁니다 — 종이로 들고 다닐 때 더 필요한 문구입니다)
     render_disclaimer()
+
+    # --- 결과 저장 버튼 (우측 하단에 떠 있습니다) --------------------
+    #     1단계 답변이 실제로 나온 뒤에만 답니다.
+    #     저장할 것이 없는 화면에 저장 버튼이 떠 있으면 안 되니까요.
+    if st.session_state.replies:
+        render_save_button()
 
 
 # ===============================================================
@@ -2458,6 +2688,24 @@ def render_dev_funnel() -> None:
         "카드 완료율",
         "-" if card_stats["카드 완료율"] is None else f"{card_stats['카드 완료율']}%",
         help="card_view ÷ card_click · 낮으면 카드 생성이 실패하고 있다는 뜻",
+    )
+
+    # --- 결과 저장(PDF) 지표 ------------------------------------
+    st.markdown(theme.rule(), unsafe_allow_html=True)
+    st.markdown("### ⇩ 결과 저장")
+    st.caption(
+        "결과 화면 우측 하단의 저장 버튼을 누른 세션 수입니다. "
+        "저장한 결과의 내용은 어디에도 남지 않습니다 — 누른 횟수만 셉니다."
+    )
+    dl = analytics.download_summary(events)
+    dl_counts = dl["counts"]
+    dl_cols = st.columns(3)
+    dl_cols[0].metric("Step 3 조회자", dl_counts["step3_view"])
+    dl_cols[1].metric("결과 저장 클릭", dl_counts["result_download_click"])
+    dl_cols[2].metric(
+        "결과 저장률",
+        "-" if dl["결과 저장률"] is None else f"{dl['결과 저장률']}%",
+        help="result_download_click ÷ step3_view",
     )
 
     # --- 사용자 피드백 지표 -------------------------------------

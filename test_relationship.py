@@ -140,9 +140,11 @@ def check_options() -> None:
           str(options))
     check("예전 '연애' 라는 이름은 선택지에 남아 있지 않다",
           options is not None and "연애" not in options)
+    # "취업/커리어" → "일·커리어" 로 이름이 넓어졌습니다.
+    # (취업 준비만의 칸이 아니라 재직·이직·직무 전환까지 담는 칸)
     check("나머지 고민 분야는 그대로다",
           options is not None
-          and options[1:] == ["취업/커리어", "돈", "인간관계", "삶의 방향", "기타"],
+          and options[1:] == ["일·커리어", "돈", "인간관계", "삶의 방향", "기타"],
           str(options[1:] if options else None))
 
     check("관계 상태 선택지가 네 개다",
@@ -246,7 +248,7 @@ def check_prompt_carries_state() -> None:
           "[관계 상태" in flow and "기혼·부부·가정" in flow)
 
     # 다른 고민에는 붙지 않아야 합니다
-    for concern in ("취업/커리어", "돈", "인간관계", "삶의 방향", "기타"):
+    for concern in ("일·커리어", "돈", "인간관계", "삶의 방향", "기타"):
         answers = other(concern)
         blank = all("[관계 상태" not in build_prompt(step, answers, SAJU, PROMPT_ASTRO)
                     for step in (1, 2, 3))

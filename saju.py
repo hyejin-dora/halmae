@@ -117,7 +117,8 @@ SIJI_RANGE = [
     "15:00~16:59", "17:00~18:59", "19:00~20:59", "21:00~22:59",
 ]
 
-# 진태양시(경도 보정)를 쓸 때 필요한 출생지 경도. 모르면 보정하지 않습니다.
+# 경도를 못 찾았을 때 쓰는 예비 표. 인터넷(geocoding)이 안 될 때만 씁니다.
+#     평소에는 astrology.geocode_place() 가 찾아낸 실제 좌표를 씁니다.
 KOREA_LONGITUDES = {
     "서울": 126.978, "인천": 126.705, "수원": 127.029, "춘천": 127.734,
     "강릉": 128.896, "대전": 127.385, "청주": 127.489, "천안": 127.115,
@@ -126,9 +127,49 @@ KOREA_LONGITUDES = {
     "창원": 128.682, "제주": 126.531,
 }
 
-# 시주 계산에 쓸 시각 기준
-HOUR_BASIS_STANDARD = "표준시"      # 동경 135도 표준시 (UTC+9)
-HOUR_BASIS_TRUE_SOLAR = "진태양시"  # 출생지 경도로 보정한 지방 평균시
+# ===============================================================
+#  시주를 판정할 '시각의 기준'  (세 가지를 구분해 둡니다)
+#
+#  [왜 이 구분이 필요한가]
+#      사용자 테스트에서 "년주·월주·일주는 맞는데 시주만 만세력과 다르다,
+#      출생시간을 30분쯤 당기면 같아진다" 는 피드백을 받았습니다.
+#      30분은 우연이 아닙니다 — 서울(동경 126.978도)과 한국 표준시의
+#      기준 자오선(동경 135도) 사이의 차이가 딱 그만큼입니다.
+#
+#          (135 - 126.978) x 4분 = 32.1분
+#
+#      즉 앱은 '시계 시각' 을 그대로 썼고, 비교한 만세력은 '출생지의
+#      해 위치' 로 고쳐 쓴 것입니다. 계산이 틀린 게 아니라 기준이 달랐습니다.
+#
+#  [세 가지 기준]
+#      표준시          시계에 적힌 시각 그대로. 경도 보정을 하지 않습니다.
+#      지방평균태양시   출생지 경도만으로 보정. (경도차 1도 = 4분)
+#      진태양시        경도 보정 + 균시차(equation of time, 최대 +-16분)까지.
+#
+#  [이 서비스가 채택한 기준 — 지방평균태양시 하나뿐입니다]
+#      · 한국 만세력이 '진태양시' 라는 이름으로 제공하는 보정은 실제로는
+#        경도 보정만 하는 지방평균태양시입니다. (그래서 서울이 늘 -32분)
+#      · 균시차는 날짜마다 값이 달라서, 같은 사람이 같은 시각에 태어나도
+#        절기 위치에 따라 시지가 오갑니다. 만세력 호환성이 오히려 떨어집니다.
+#      · 그래서 균시차는 '검토했고 채택하지 않은 방식' 으로 남겨둡니다.
+#        (아래 equation_of_time_minutes 는 두 방식의 차이를 시험으로
+#         확인하기 위한 것이고, 이 서비스의 시주 계산에는 쓰이지 않습니다)
+#
+#      두 방식을 섞어 쓰는 곳은 한 곳도 없습니다. ADOPTED_HOUR_BASIS 하나만 봅니다.
+# ===============================================================
+HOUR_BASIS_STANDARD = "표준시"            # 동경 135도 표준시 그대로
+HOUR_BASIS_LMT = "지방평균태양시"          # 경도만 보정  ← 채택
+HOUR_BASIS_TRUE_SOLAR = "진태양시"        # 경도 + 균시차 (검토했으나 채택 안 함)
+
+# 이 서비스의 시주 기준. app.py 는 이 값만 씁니다.
+ADOPTED_HOUR_BASIS = HOUR_BASIS_LMT
+
+# 위 기준을 정규화한 시각이 딛고 서는 자오선.
+#     계산은 늘 UTC 로 옮긴 뒤 UTC+9 로 되돌려 놓고 시작하므로(아래 1번 단계),
+#     비교 대상 자오선은 언제나 동경 135도입니다.
+#     한국이 UTC+8:30(자오선 127.5도) 이던 시절도 같은 순간을 UTC+9 시계로
+#     바꿔 적은 것이라, 경도 보정을 하면 결국 같은 지방평균태양시가 나옵니다.
+STANDARD_MERIDIAN = 135.0
 
 NO_BIRTH_TIME_NOTE = "출생시간 미입력으로 시주 해석 제외"
 
@@ -344,6 +385,177 @@ def _term_index(julian_day: float) -> int:
 
 
 # ===============================================================
+#  균시차 (equation of time)  —  검토했고 채택하지 않은 방식
+#
+#  진태양시(해시계 시각)와 평균태양시(고르게 흐르는 시각)의 차이입니다.
+#  지구 궤도가 타원이고 자전축이 기울어 있어서 생기며, 한 해 동안
+#  대략 -14분 ~ +16분 사이를 오갑니다.
+#
+#  이 서비스의 시주 계산은 이 값을 쓰지 않습니다.
+#  두 방식이 실제로 얼마나 다른지 시험(test)에서 확인하기 위해 남겨둡니다.
+# ===============================================================
+def equation_of_time_minutes(julian_day: float) -> float:
+    """이 시각의 균시차(분). 양수면 해시계가 시계보다 앞섭니다."""
+    t = (julian_day - 2451545.0) / 36525.0
+
+    # 태양의 평균 황경과 평균 근점 이각
+    mean_longitude = (280.46646 + 36000.76983 * t + 0.0003032 * t * t) % 360.0
+    mean_anomaly = math.radians(
+        (357.52911 + 35999.05029 * t - 0.0001537 * t * t) % 360.0
+    )
+
+    # 황도 경사각 (도)
+    obliquity = (
+        23.439291 - 0.0130042 * t - 1.64e-7 * t * t + 5.036e-7 * t * t * t
+    )
+    y = math.tan(math.radians(obliquity / 2.0)) ** 2
+
+    # Smart 의 표준 근사식 (오차 수초 이내)
+    radians_longitude = math.radians(mean_longitude)
+    minutes = 4.0 * math.degrees(
+        y * math.sin(2.0 * radians_longitude)
+        - 2.0 * 0.016708634 * math.sin(mean_anomaly)
+        + 4.0 * 0.016708634 * y * math.sin(mean_anomaly)
+        * math.cos(2.0 * radians_longitude)
+        - 0.5 * y * y * math.sin(4.0 * radians_longitude)
+        - 1.25 * 0.016708634 ** 2 * math.sin(2.0 * mean_anomaly)
+    )
+    return minutes
+
+
+# ===============================================================
+#  시주를 판정할 시각 고르기  (여기 한 곳에서만 결정합니다)
+#
+#  [고정된 30분을 빼지 않습니다]
+#      "모든 사용자에게서 30분을 뺀다" 는 방식은 서울에서만 맞고
+#      부산(-23분)·목포(-34분)에서는 틀립니다. 경도로 계산합니다.
+#
+#  [추적할 수 있게 만듭니다]
+#      standard_meridian / longitude_difference / correction_minutes /
+#      corrected_birth_time 을 그대로 돌려줍니다. 어디서 어긋났는지
+#      사람이 눈으로 따라갈 수 있어야 하니까요.
+#
+#  [개인정보]
+#      이 함수는 값을 돌려주기만 하고, 아무것도 기록하지 않습니다.
+#      로그 · analytics · Supabase 로 나가는 통로가 여기에는 없습니다.
+# ===============================================================
+# ===============================================================
+#  이 서비스의 '시각 책임 분리' 정책  (확정 · 2026-08)
+#
+#  경도 보정을 도입하면서 반드시 갈라놓아야 하는 것이 하나 있습니다.
+#  "보정한 시각이 날짜를 넘길 때 일주도 따라 넘어가는가?" 입니다.
+#
+#      [정책]  넘어가지 않습니다. 두 계산은 서로 다른 시각을 봅니다.
+#
+#          입력된 출생일 (달력 날짜)
+#              → 년주 · 월주 · 일주
+#                (절기 판정 · 일진. 기존에 검증된 기준 그대로)
+#
+#          출생지 경도로 보정한 시각
+#              → 시지 · 시주
+#                (지방평균태양시. 시주 판정에만 씁니다)
+#
+#  [왜 이렇게 가르는가]
+#      · 년월일주는 이미 만세력과 맞는다고 확인된 계산입니다.
+#        시주를 고치려고 도입한 보정이 검증된 계산을 흔들면 안 됩니다.
+#      · 경도 보정은 "이 사람이 태어난 곳에서 해가 어디 있었나" 를 재는 것이지,
+#        "며칠에 태어났나" 를 다시 정하는 것이 아닙니다.
+#        태어난 날은 달력이 정하고, 그건 보정 대상이 아닙니다.
+#      · 서울에서 00:20 에 태어난 사람은 보정하면 전날 23:48 이 되지만,
+#        그 사람의 생일은 여전히 그날입니다. 일주도 그날 것을 씁니다.
+#
+#  [시주의 천간은 어디서 오는가]
+#      시간 천간은 '일간' 으로부터 정해집니다. 그 일간은 위에서 이미 확정된
+#      일주의 천간입니다 — 보정한 시각의 날짜에서 다시 뽑지 않습니다.
+#      그래서 compute_hour_pillar() 는 일간을 인자로 받습니다.
+#      (안에서 날짜를 다시 계산할 방법이 아예 없게 만들어 둔 것입니다)
+#
+#  [한 줄로]
+#      출생일 → 년·월·일주 /  보정 시각 → 시주.  경계는 서로 넘지 않는다.
+# ===============================================================
+PILLAR_TIME_POLICY = (
+    "출생지 경도 보정은 시주(시지·시간 천간) 판정에만 쓴다. "
+    "년주·월주·일주는 입력된 출생일을 기준으로 한 기존 계산을 그대로 따르며, "
+    "보정한 시각이 전날이나 다음날로 넘어가더라도 그 이유로 일주를 바꾸지 않는다."
+)
+
+
+def compute_hour_pillar(day_stem: int, judged: datetime) -> tuple[int, int]:
+    """확정된 일간 + 보정한 시각 → (시간 천간, 시지) 번호.
+
+    day_stem : **이미 확정된 일주의 천간 번호** (0=갑 … 9=계).
+               compute_saju 의 5단계에서 입력된 출생일로 구한 값입니다.
+               이 함수는 날짜를 받지 않습니다 — 일간을 다시 계산할 방법이
+               없어야, 보정한 시각의 날짜가 일주에 스며들 수 없습니다.
+    judged   : 시지를 판정할 시각 (resolve_hour_moment 가 돌려준 값).
+               여기서는 시·분만 봅니다. 날짜는 보지 않습니다.
+
+    [시지]  23시부터 자시가 시작되므로 한 시간 밀어서 두 시간씩 끊습니다.
+    [천간]  갑기일 → 갑자시, 을경일 → 병자시, 병신일 → 무자시,
+            정임일 → 경자시, 무계일 → 임자시 에서 시지만큼 나아갑니다.
+
+    (PILLAR_TIME_POLICY 를 코드로 옮긴 자리입니다)
+    """
+    hour_branch = ((judged.hour + 1) // 2) % 12
+    hour_stem = ((day_stem % 5) * 2 + hour_branch) % 10
+    return hour_stem, hour_branch
+
+
+def resolve_hour_moment(
+    utc_moment: datetime,
+    longitude: float | None,
+    basis: str,
+) -> tuple[datetime, dict]:
+    """시주를 판정할 시각과, 그 시각이 나온 과정을 함께 돌려줍니다.
+
+    utc_moment : 출생 순간(UTC). 서머타임·과거 표준시는 이미 정리된 값.
+    longitude  : 출생지 경도(동경 양수). None 이면 보정하지 않습니다.
+    basis      : HOUR_BASIS_* 중 하나.
+
+    돌려주는 값 = (판정에 쓸 시각, 추적용 계산 과정)
+    """
+    # 늘 동경 135도 시계로 되돌려 놓고 시작합니다. (기준을 하나로 고정)
+    standard_moment = utc_moment.astimezone(STANDARD_TZ)
+
+    trace = {
+        "basis": HOUR_BASIS_STANDARD,
+        "standard_meridian": STANDARD_MERIDIAN,
+        "longitude": None,
+        "longitude_difference": None,
+        "correction_minutes": 0.0,
+        "equation_of_time_minutes": None,
+        "standard_birth_time": standard_moment.strftime("%H:%M"),
+        "corrected_birth_time": standard_moment.strftime("%H:%M"),
+    }
+
+    # 경도를 모르면 보정할 수 없습니다. 표준시 그대로 씁니다.
+    if basis == HOUR_BASIS_STANDARD or longitude is None:
+        return standard_moment, trace
+
+    # --- 경도 보정 (지방평균태양시) ---------------------------------
+    #     경도 1도 = 4분. 기준 자오선보다 서쪽이면 음수(시각이 당겨집니다).
+    longitude_difference = float(longitude) - STANDARD_MERIDIAN
+    correction_minutes = longitude_difference * 4.0
+
+    trace["longitude"] = float(longitude)
+    trace["longitude_difference"] = longitude_difference
+    trace["correction_minutes"] = correction_minutes
+    trace["basis"] = HOUR_BASIS_LMT
+
+    # --- 균시차 (진태양시일 때만 · 이 서비스는 쓰지 않습니다) ---------
+    if basis == HOUR_BASIS_TRUE_SOLAR:
+        eot = equation_of_time_minutes(_to_julian_day(utc_moment))
+        trace["equation_of_time_minutes"] = eot
+        correction_minutes += eot
+        trace["correction_minutes"] = correction_minutes
+        trace["basis"] = HOUR_BASIS_TRUE_SOLAR
+
+    corrected = standard_moment + timedelta(minutes=correction_minutes)
+    trace["corrected_birth_time"] = corrected.strftime("%H:%M")
+    return corrected, trace
+
+
+# ===============================================================
 #  네 기둥 만들기
 # ===============================================================
 def _make_pillar(stem_index: int, branch_index: int) -> dict:
@@ -430,17 +642,24 @@ def compute_saju(
     birth_time: time | None = None,
     calendar_type: str = "양력",
     leap_month: str | None = None,
-    hour_basis: str = HOUR_BASIS_STANDARD,
+    hour_basis: str = ADOPTED_HOUR_BASIS,
     birth_place: str | None = None,
+    birth_longitude: float | None = None,
 ) -> dict:
     """생년월일시 → 년주·월주·일주·시주 + 오행 분포.
 
-    birth_date    : 입력한 날짜 (양력이면 양력, 음력이면 음력)
-    birth_time    : 출생시간. None 이면 시주를 계산하지 않습니다.
-    calendar_type : "양력" 또는 "음력"
-    leap_month    : 음력일 때 "평달" / "윤달"
-    hour_basis    : "표준시"(동경 135도) 또는 "진태양시"(출생지 경도 보정)
-    birth_place   : 진태양시를 쓸 때 경도를 찾기 위한 지역 이름
+    birth_date      : 입력한 날짜 (양력이면 양력, 음력이면 음력)
+    birth_time      : 출생시간. None 이면 시주를 계산하지 않습니다.
+    calendar_type   : "양력" 또는 "음력"
+    leap_month      : 음력일 때 "평달" / "윤달"
+    hour_basis      : 시주를 판정할 시각의 기준. 기본값은 이 서비스가 채택한
+                      지방평균태양시(출생지 경도 보정)입니다.
+    birth_place     : 경도를 못 받았을 때 예비 표에서 찾을 지역 이름
+    birth_longitude : 출생지 경도(동경 양수). geocoding 으로 얻은 실제 값이
+                      있으면 이걸 넘겨주세요. 예비 표보다 이 값이 우선입니다.
+
+    년주·월주·일주는 hour_basis 와 무관합니다.
+    (절기·일진은 출생 순간 자체로 정해지므로 경도 보정과 상관이 없습니다)
 
     계산이 안 되면 CalendarError를 냅니다.
     """
@@ -537,47 +756,112 @@ def compute_saju(
     if not has_time:
         hour_skip_reason = NO_BIRTH_TIME_NOTE
     else:
-        # 6-1. 시주를 판정할 시각 (표준시 또는 진태양시)
-        longitude = None
-        if hour_basis == HOUR_BASIS_TRUE_SOLAR:
+        # 6-1. 경도 찾기 — 실제 좌표가 있으면 그것을, 없으면 예비 표를 씁니다.
+        longitude = birth_longitude
+        longitude_source = "출생지 좌표"
+        if longitude is None:
             longitude = _lookup_longitude(birth_place)
-            if longitude is None:
-                notes.append(
-                    f"출생지 '{birth_place or '미입력'}' 의 경도를 찾지 못해 "
-                    "진태양시 보정을 하지 못했어요. 표준시로 계산했습니다."
-                )
-                hour_basis = HOUR_BASIS_STANDARD
+            longitude_source = "지역명 예비 표"
 
-        if hour_basis == HOUR_BASIS_TRUE_SOLAR and longitude is not None:
-            shift = timedelta(hours=longitude / 15.0)
-            judged = utc_moment + shift
-            basis_label = f"진태양시(경도 {longitude:g}°E · 평균태양시)"
-        else:
-            judged = utc_moment.astimezone(STANDARD_TZ)
-            basis_label = "동경 135도 표준시(UTC+9)"
+        wanted_basis = hour_basis
+        if wanted_basis != HOUR_BASIS_STANDARD and longitude is None:
+            # 경도를 못 찾으면 보정할 수가 없습니다. 표준시로 물러나고,
+            # 시지가 달라질 수 있다는 사실을 사용자에게 분명히 알립니다.
+            notes.append(
+                f"출생지 '{birth_place or '미입력'}' 의 경도를 찾지 못해 "
+                "출생지 기준 시간 보정을 하지 못했어요. 시계 시각(동경 135도 "
+                "표준시) 그대로 시주를 잡았습니다. 만세력과 시주가 다르면 "
+                "출생지역을 더 자세히 적어주세요."
+            )
+            hour_basis = HOUR_BASIS_STANDARD
+            longitude_source = "찾지 못함"
 
-        # 6-2. 23시부터 자시가 시작되므로 한 시간 밀어서 2로 나눕니다.
-        hour_branch = ((judged.hour + 1) // 2) % 12
-        hour_stem = ((day_stem % 5) * 2 + hour_branch) % 10
+        # 6-2. 시주를 판정할 시각 (기준은 ADOPTED_HOUR_BASIS 하나뿐입니다)
+        judged, hour_trace = resolve_hour_moment(
+            utc_moment, longitude, hour_basis
+        )
+
+        # 6-3. 시지·시간 천간
+        #     시간 천간은 위 5단계에서 '입력된 출생일'로 확정한 일간(day_stem)
+        #     에서 나옵니다. 보정한 시각의 날짜로 일간을 다시 뽑지 않습니다.
+        #     (compute_hour_pillar 는 날짜를 아예 받지 않습니다 — 정책을
+        #      주석이 아니라 함수 모양으로 못 박아둔 것입니다)
+        hour_stem, hour_branch = compute_hour_pillar(day_stem, judged)
         hour_pillar = _make_pillar(hour_stem, hour_branch)
+
+        if hour_trace["basis"] == HOUR_BASIS_STANDARD:
+            basis_label = "동경 135도 표준시(UTC+9) 그대로"
+        else:
+            basis_label = (
+                f"{hour_trace['basis']}"
+                f"(경도 {hour_trace['longitude']:g}°E · "
+                f"{hour_trace['correction_minutes']:+.0f}분 보정)"
+            )
 
         hour_detail = {
             "기준": basis_label,
-            "판정에 쓴 시각": judged.strftime("%H:%M"),
+            "기준 이름": hour_trace["basis"],
+            "경도 출처": longitude_source,
+            "standard_meridian": hour_trace["standard_meridian"],
+            "longitude": hour_trace["longitude"],
+            "longitude_difference": hour_trace["longitude_difference"],
+            "correction_minutes": hour_trace["correction_minutes"],
+            "입력 시각": birth_time.strftime("%H:%M"),
+            "표준시 시각": hour_trace["standard_birth_time"],
+            "corrected_birth_time": hour_trace["corrected_birth_time"],
+            "판정에 쓴 시각": hour_trace["corrected_birth_time"],
             "시지 구간": f"{JIJI[hour_branch]}시 ({SIJI_RANGE[hour_branch]})",
         }
 
         if judged.hour == 23:
             notes.append(
-                "밤 23시대에 태어났어요. 이 시간을 '야자시'로 보아 일주를 "
-                "다음 날로 넘기는 유파도 있습니다. 여기서는 일주를 넘기지 않고, "
-                "시지만 자시로 잡았습니다."
+                "보정한 시각이 밤 23시대라 시지를 자시로 잡았어요. "
+                "이 시간을 '야자시'로 보아 일주를 다음 날로 넘기는 유파도 "
+                "있지만, 이 서비스는 일주를 넘기지 않습니다. "
+                "일주는 언제나 네가 적어준 출생일로 계산해요."
             )
-        if hour_basis == HOUR_BASIS_STANDARD:
+
+        if hour_trace["basis"] == HOUR_BASIS_LMT:
             notes.append(
-                "시주는 동경 135도 표준시 그대로 계산했어요. "
-                "출생지 경도로 30분 안팎을 앞당기는 '진태양시' 방식을 쓰면 "
-                "경계 시각(홀수시 정각 부근)에서는 시지가 달라질 수 있습니다."
+                f"시주는 출생지의 해 위치에 맞춰 잡았어요. "
+                f"시계로는 {hour_trace['standard_birth_time']} 이지만, "
+                f"출생지(동경 {hour_trace['longitude']:g}도)는 표준시 기준선인 "
+                f"동경 135도보다 서쪽이라 실제 해의 위치는 "
+                f"{hour_trace['corrected_birth_time']} 에 해당합니다. "
+                "('지방평균태양시' — 만세력이 '진태양시'라고 부르는 그 보정입니다)"
+            )
+            # 보정 때문에 날짜가 넘어가는 경우 (자정 무렵 출생)
+            #     예) 서울 00:20 출생 → 보정하면 전날 23:48
+            #     기준선(135도)보다 동쪽에서 태어났으면 다음날로 넘어갑니다.
+            #
+            #     [이때도 일주는 '태어난 날' 그대로입니다 — 확정 정책]
+            #     보정은 "해가 어디 있었나" 를 재는 것이고, "며칠에 태어났나" 를
+            #     다시 정하는 것이 아닙니다. 태어난 날은 달력이 정합니다.
+            #     (PILLAR_TIME_POLICY · compute_hour_pillar 참고)
+            if judged.date() != solar_date:
+                moved = "전날" if judged.date() < solar_date else "다음날"
+                notes.append(
+                    f"보정한 시각({hour_trace['corrected_birth_time']})은 "
+                    f"{moved}에 걸치지만, 시지를 잡는 데만 썼어요. "
+                    "년주·월주·일주는 네가 적어준 출생일 그대로 계산했단다. "
+                    "(태어난 날은 달력이 정하는 것이라, 시간 보정으로 "
+                    "바꾸지 않는다는 것이 이 서비스의 기준이에요)"
+                )
+
+            # 시지 경계에 아주 가까우면 옆 칸으로 넘어갈 수 있음을 알립니다.
+            minutes_into = (judged.hour % 2) * 60 + judged.minute
+            to_edge = min((minutes_into + 60) % 120, 120 - (minutes_into + 60) % 120)
+            if to_edge <= 10:
+                notes.append(
+                    f"보정한 시각이 시지가 바뀌는 경계에서 {to_edge}분 안쪽이에요. "
+                    "출생시간이 몇 분만 달라도 시주가 옆 칸으로 넘어갑니다. "
+                    "출생시간을 정확히 아는지 한 번 더 확인해주세요."
+                )
+        elif hour_trace["basis"] == HOUR_BASIS_STANDARD:
+            notes.append(
+                "시주는 시계 시각(동경 135도 표준시) 그대로 계산했어요. "
+                "출생지 경도로 20~35분을 앞당기는 만세력과는 "
+                "경계 시각에서 시지가 달라질 수 있습니다."
             )
 
     # --- 7. 오행 분포 --------------------------------------------
@@ -610,6 +894,8 @@ def compute_saju(
         "시주 계산 여부": has_time,
         "시주 제외 사유": hour_skip_reason,
         "시주 계산 근거": hour_detail,
+        # 시주를 어떤 시각 기준으로 잡았는지. 화면·프롬프트가 같은 값을 봅니다.
+        "시주 기준": (hour_detail or {}).get("기준 이름"),
         # --- 오행 ---
         "오행 분포": ohaeng,
         "오행 요약": " / ".join(f"{k} {ohaeng[k]}" for k in OHAENG_ORDER),
@@ -767,6 +1053,7 @@ def saju_facts(saju: dict) -> dict:
         "월령": f"{saju['적용 절기']['월지']} ({saju['적용 절기']['현재 구간']} 이후)",
         "시주 계산 여부": saju["시주 계산 여부"],
         "시주 제외 사유": saju["시주 제외 사유"],
+        "시주 기준": saju.get("시주 기준"),
     }
 
 
@@ -782,7 +1069,12 @@ SAJU_LOCK_RULES = """[CALCULATED_SAJU 사용 규칙 — 어기면 답변 실패�
 - 명식 값(년주·월주·일주·시주·일간·오행 개수)을 글에 적을 때는
   위에 적힌 글자를 그대로 옮겨 적어라. 한 글자도 바꾸지 마라.
 - 위에 없는 명식 값(대운·세운·지장간·신살 등)은 만들어내지 마라.
-- 오행 개수는 위에 적힌 숫자만 쓴다. 더하거나 빼서 새로 세지 마라."""
+- 오행 개수는 위에 적힌 숫자만 쓴다. 더하거나 빼서 새로 세지 마라.
+- 시주(시간 천간 · 시지)는 특히 손대지 마라. 출생시간에 경도 보정이 이미
+  들어간 값이라, 출생시간만 보고 다시 계산하면 반드시 틀린다.
+  "몇 시니까 무슨 시" 같은 말로 시지를 새로 정하지 마라.
+- 시간 보정 · 표준시 · 진태양시 · 경도 같은 계산 과정을 답변에 설명하지 마라.
+  그건 Python 이 이미 끝낸 일이고, 사용자에게는 결과만 필요하다."""
 
 
 def format_saju_for_prompt(saju: dict) -> str:

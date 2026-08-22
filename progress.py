@@ -155,7 +155,7 @@ def loader_html(stages, *, cadence: float = PHRASE_SECONDS) -> str:
 
 
 @contextmanager
-def _loader(stages):
+def _loader(stages, slot=None):
     """로딩 판을 띄우고, 블록이 끝나면 그 자리에서 지웁니다.
 
     지우는 것은 finally 안에 있습니다. 일이 실패해도 로딩 판이
@@ -163,10 +163,21 @@ def _loader(stages):
 
     HTML 을 못 그리는 환경이면 st.spinner 하나로 물러납니다.
     (연출 실패가 답변 실패로 번지지 않게)
+
+    [slot — 로딩 판이 뜰 자리를 미리 정해두는 인자]
+        아무것도 넘기지 않으면 지금 그리는 자리에 새로 만듭니다.
+        (Step2 · Step3 · 올해의 흐름 · 올해의 카드가 이 방식입니다 —
+         버튼 바로 아래에서 그려지므로 예전 그대로 두었습니다)
+
+        st.empty() 로 미리 잡아둔 자리를 넘기면 그 자리에 그립니다.
+        첫 화면의 '할매에게 물어보기' 는 페이지 맨 아래에 있어서,
+        버튼을 누른 뒤에 만들면 로딩 판이 화면 밖(버튼 아래)에 생깁니다.
+        그래서 버튼 '위' 에 자리를 미리 잡아두고 그 자리를 넘겨줍니다.
     """
     phrases = _phrases(stages)
     try:
-        slot = st.empty()
+        if slot is None:
+            slot = st.empty()
         slot.markdown(loader_html(phrases), unsafe_allow_html=True)
     except Exception:
         log.debug("로딩 판을 그리지 못해 spinner 로 물러납니다", exc_info=True)
@@ -201,7 +212,7 @@ class _Steps:
 
 
 @contextmanager
-def steps(labels: list[str], done_label: str | None = None):
+def steps(labels: list[str], done_label: str | None = None, *, slot=None):
     """실제로 나뉘어 있는 여러 단계를 도는 동안 로딩 판을 띄웁니다.
 
         with progress.steps(progress.CALC_STAGES) as s:
@@ -214,10 +225,13 @@ def steps(labels: list[str], done_label: str | None = None):
         계산이 끝나는 순간 로딩 판을 지우고 결과로 넘어갑니다.
         (인자는 부르는 쪽 코드를 지키려고 받아만 둡니다)
 
+    [slot] 로딩 판을 띄울 자리를 미리 정해두고 싶을 때만 넘깁니다.
+           (st.empty() 로 잡아둔 자리 — 자세한 설명은 _loader 참고)
+
     [주의] 안쪽 일이 실패하면 오류를 그대로 위로 올려보냅니다 —
            여기서 붙잡아 다시 돌리면 같은 일을 두 번 하게 됩니다.
     """
-    with _loader(labels):
+    with _loader(labels, slot=slot):
         yield _Steps()
 
 
@@ -231,6 +245,7 @@ def run_staged(
     done_label: str | None = None,
     perf_name: str | None = None,
     perf_sink: dict | None = None,
+    slot=None,
 ):
     """오래 걸리는 일 하나를 돌리는 동안 로딩 판을 띄웁니다.
 
@@ -257,7 +272,7 @@ def run_staged(
     """
     started = time.perf_counter()
     try:
-        with _loader(stages):
+        with _loader(stages, slot=slot):
             return work()
     finally:
         if perf_name:

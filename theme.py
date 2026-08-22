@@ -1876,6 +1876,307 @@ def _css_mobile(t: dict) -> str:
     """
 
 
+def _css_save(t: dict) -> str:
+    """결과 저장 버튼 — 화면 우측 아래에 붙어 있는 작은 정사각형.
+
+    [무엇을 하는 버튼인가]
+        브라우저의 인쇄 창을 엽니다. 거기서 "PDF로 저장" 을 고르면
+        결과 전체가 읽기 좋은 문서로 저장됩니다.
+        (새 라이브러리를 넣지 않고, 브라우저가 원래 가진 기능을 씁니다)
+
+    [본문을 가리지 않게]
+        · 크기를 작게 (2.75rem · 모바일 2.5rem) 잡습니다.
+        · 화면 맨 아래 버튼들과 겹치지 않도록, 결과 화면 아래쪽에
+          버튼 높이만큼 여백을 둡니다. (.halmae-save-gap)
+        · 인쇄할 때는 이 버튼 자체가 사라집니다. (_css_print)
+    """
+    return f"""
+    /* ===== 결과 저장 버튼 (우측 하단 고정) ========================= */
+    .st-key-result_save {{
+        position: fixed;
+        right: 1.1rem;
+        bottom: 1.1rem;
+        width: 2.75rem;
+        height: 2.75rem;
+        z-index: 90;
+        margin: 0;
+    }}
+    .st-key-result_save .stButton {{ margin: 0; }}
+    .st-key-result_save .stButton > button {{
+        width: 2.75rem;
+        min-width: 2.75rem;
+        height: 2.75rem;
+        min-height: 2.75rem;
+        padding: 0;
+        border-radius: {t['radius_card']};
+        border: 1px solid {t['line_gold']};
+        background: linear-gradient(180deg,
+            {t['bg_panel']} 0%, {t['bg_base']} 100%);
+        box-shadow: 0 3px 14px rgba(12, 6, 9, 0.55);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }}
+    .st-key-result_save .stButton > button p,
+    .st-key-result_save .stButton > button div {{
+        font-size: 1.05rem;
+        line-height: 1;
+        margin: 0;
+        color: {t['gold']} !important;
+        letter-spacing: 0;
+    }}
+    .st-key-result_save .stButton > button:hover {{
+        border-color: {t['gold_bright']};
+        box-shadow: 0 3px 18px rgba(12, 6, 9, 0.7);
+    }}
+    .st-key-result_save .stButton > button:hover p {{
+        color: {t['gold_bright']} !important;
+    }}
+
+    /* 떠 있는 버튼이 마지막 줄을 덮지 않도록 확보하는 빈 자리 */
+    .halmae-save-gap {{ height: 4.25rem; }}
+
+    /* 인쇄물에만 나오는 표지 줄 — 화면에서는 보이지 않습니다 */
+    .halmae-print-only {{ display: none; }}
+
+    @media (max-width: 480px) {{
+        .st-key-result_save {{
+            right: 0.75rem;
+            bottom: 0.75rem;
+            width: 2.5rem;
+            height: 2.5rem;
+        }}
+        .st-key-result_save .stButton > button {{
+            width: 2.5rem;
+            min-width: 2.5rem;
+            height: 2.5rem;
+            min-height: 2.5rem;
+        }}
+    }}
+    """
+
+
+def _css_print(t: dict) -> str:
+    """인쇄(= PDF 저장) 전용 손질.
+
+    [무엇을 노리는가]
+        화면 디자인을 그대로 옮기지 않습니다. 어두운 배경에 금색 글씨는
+        종이에서 읽을 수 없습니다. 인쇄물은 '흰 종이에 검은 글씨' 로
+        다시 짭니다. 남는 것은 결과 내용뿐입니다.
+
+    [빠지는 것]
+        입력 양식 · 모든 버튼(CTA · 다시 입력 · 저장 버튼 자체) ·
+        피드백 UI · Premium 안내 · 개발자 UI · 로딩 판 ·
+        Streamlit 기본 메뉴 · 툴바 · 헤더 · 사이드바.
+
+    [남는 것]
+        표지 줄 · 확정 명식 · 1~3단계 · 올해의 흐름(대운·세운) · 올해의 카드.
+
+    [잘림 방지]
+        · 카드/단계는 break-inside: avoid 로 페이지 경계에서 쪼개지지 않게.
+        · 문단은 orphans/widows 로 한 줄만 떨어져 남는 일을 막습니다.
+        · 제목 바로 뒤에서 페이지가 넘어가지 않게 break-after: avoid.
+    """
+    return """
+    /* ===== 인쇄 / PDF 저장 ========================================= */
+    @media print {
+        /* --- 종이 --------------------------------------------------- */
+        @page {
+            size: A4;
+            margin: 14mm 12mm;
+        }
+
+        /* --- 배경을 지우고 글씨를 검게 ------------------------------- */
+        /*     어두운 배경 + 금색 글씨는 종이에서 안 보입니다.
+               배경 그림자·그라데이션을 모두 없애고 검은 글씨로 바꿉니다. */
+        html, body,
+        .stApp, [data-testid="stAppViewContainer"],
+        [data-testid="stMain"], .block-container,
+        [data-testid="stVerticalBlock"],
+        [data-testid="stVerticalBlockBorderWrapper"] {
+            background: #ffffff !important;
+            color: #1a1a1a !important;
+            box-shadow: none !important;
+        }
+        .stApp * {
+            text-shadow: none !important;
+        }
+        .block-container {
+            padding: 0 !important;
+            max-width: 100% !important;
+        }
+
+        /* --- Streamlit 기본 껍데기 숨기기 ---------------------------- */
+        header, footer,
+        [data-testid="stHeader"],
+        [data-testid="stToolbar"],
+        [data-testid="stDecoration"],
+        [data-testid="stStatusWidget"],
+        [data-testid="stSidebar"],
+        [data-testid="stSidebarCollapsedControl"],
+        [data-testid="stBottomBlockContainer"],
+        #MainMenu {
+            display: none !important;
+        }
+
+        /* --- 버튼 · 입력 양식 전부 숨기기 ---------------------------- */
+        /*     CTA · 다시 입력하기 · 처음으로 · 저장 버튼 자체가 모두
+               .stButton 이라 이 한 줄로 함께 사라집니다. */
+        .stButton, .stDownloadButton, .stLinkButton,
+        .stForm, .stTextInput, .stTextArea, .stDateInput, .stTimeInput,
+        .stRadio, .stCheckbox, .stSelectbox, .stNumberInput, .stSlider,
+        [data-testid="stWidgetLabel"],
+        [data-testid="stFileUploader"],
+        iframe {
+            display: none !important;
+        }
+
+        /* --- 피드백 · Premium · 개발자 UI · 로딩 판 ------------------ */
+        /*     st.container(key="...") 가 붙여주는 st-key-* 로 집습니다.
+               (app.py 에서 halmae_noprint_* 라는 이름으로 감싸둡니다) */
+        [class*="st-key-halmae_noprint"],
+        .halmae-loading,
+        .halmae-feedback-title,
+        .halmae-premium,
+        .halmae-premium-title,
+        .halmae-premium-desc,
+        .halmae-premium-price,
+        .halmae-fakedoor,
+        .halmae-fakedoor-title,
+        .halmae-fakedoor-body,
+        .halmae-teaser,
+        .halmae-beta-tag,
+        .halmae-modelbadge,
+        .halmae-mockbadge,
+        .halmae-mockfooter,
+        .halmae-guide,
+        [data-testid="stExpander"],
+        details,
+        [data-testid="stAlert"],
+        [data-testid="stSpinner"],
+        [data-testid="stCaptionContainer"],
+        [data-testid="stCode"],
+        [data-testid="stCodeBlock"],
+        .stCode, pre,
+        [data-testid="stMetric"],
+        .halmae-save-gap,
+        .halmae-fieldnote {
+            display: none !important;
+        }
+
+        /* --- 인쇄물에만 나오는 표지 줄 -------------------------------- */
+        .halmae-print-only {
+            display: block !important;
+            margin: 0 0 10mm 0;
+            padding-bottom: 4mm;
+            border-bottom: 1.5pt solid #1a1a1a;
+        }
+        .halmae-print-title {
+            font-size: 20pt;
+            font-weight: 700;
+            margin: 0 0 2mm 0;
+            color: #1a1a1a !important;
+        }
+        .halmae-print-note {
+            font-size: 9pt;
+            margin: 0;
+            color: #555555 !important;
+        }
+
+        /* --- 글자 · 색 -------------------------------------------------- */
+        /*     한글이 깨지지 않도록 시스템 한글 글꼴을 뒤에 받쳐둡니다.
+               (웹폰트를 못 받아온 상태로 인쇄해도 글자가 남습니다) */
+        body, p, li, td, th, div, span, h1, h2, h3, h4 {
+            font-family: "Noto Serif KR", "Nanum Myeongjo",
+                         "Apple SD Gothic Neo", "Malgun Gothic",
+                         serif !important;
+            color: #1a1a1a !important;
+        }
+        p, li {
+            font-size: 10.5pt !important;
+            line-height: 1.65 !important;
+            orphans: 3;
+            widows: 3;
+        }
+
+        /* --- 제목 · 배지 ------------------------------------------------ */
+        .halmae-step-badge {
+            font-size: 9pt !important;
+            color: #666666 !important;
+            margin: 0 0 1mm 0 !important;
+            break-after: avoid;
+        }
+        .halmae-step-title {
+            font-size: 14pt !important;
+            font-weight: 700;
+            color: #1a1a1a !important;
+            margin: 0 0 3mm 0 !important;
+            break-after: avoid;
+            page-break-after: avoid;
+        }
+        .halmae-rule {
+            display: none !important;
+        }
+        /* 화면 맨 위 "할매" 포스터 제목은 인쇄 표지 줄로 대체합니다 */
+        .halmae-title-sm, .halmae-script {
+            display: none !important;
+        }
+
+        /* --- 카드 · 섹션이 페이지 경계에서 쪼개지지 않게 ---------------- */
+        .halmae-card, .halmae-yearcard, .halmae-notice, .halmae-section {
+            background: #ffffff !important;
+            border: 0.75pt solid #999999 !important;
+            border-radius: 2pt !important;
+            box-shadow: none !important;
+            padding: 4mm !important;
+            margin: 0 0 5mm 0 !important;
+            break-inside: avoid;
+            page-break-inside: avoid;
+        }
+        /* 아주 긴 카드(3단계 행동 지령 · 올해의 흐름)는 쪼개지는 것을
+           허용합니다. avoid 를 걸어두면 한 페이지에 안 들어가서
+           통째로 다음 장으로 밀려나고, 앞 장에 큰 빈칸이 남습니다.
+           한 페이지(A4 본문 약 240mm)를 넘길 만한 것만 풀어줍니다. */
+        .halmae-card:has(.halmae-steps),
+        .halmae-card:has(.halmae-luck-row) {
+            break-inside: auto;
+            page-break-inside: auto;
+        }
+        /* 대운·세운 표 한 줄은 쪼개지지 않게 */
+        .halmae-luck-row, .halmae-myeongsik-row {
+            break-inside: avoid;
+            page-break-inside: avoid;
+        }
+
+        /* --- 구분선 ---------------------------------------------------- */
+        .halmae-sep {
+            border-top: 0.5pt solid #bbbbbb !important;
+            background: none !important;
+            margin: 4mm 0 !important;
+            height: 0 !important;
+        }
+
+        /* --- 올해의 카드 그림 ------------------------------------------ */
+        /*     그림은 남기되, 종이 폭을 넘지 않게 줄입니다. */
+        .halmae-yearcard-svg, .halmae-yearcard img {
+            max-width: 70mm !important;
+            height: auto !important;
+        }
+
+        /* --- 표 (오행 개수 등) ------------------------------------------ */
+        table { border-collapse: collapse !important; }
+        th, td {
+            border: 0.5pt solid #999999 !important;
+            padding: 1.5mm 2.5mm !important;
+            color: #1a1a1a !important;
+        }
+
+        /* 배경색을 지운 자리에 글씨가 안 보이는 일을 막습니다 */
+        [style*="color"] { color: #1a1a1a !important; }
+    }
+    """
+
+
 def build_css() -> str:
     """모든 조각을 합쳐 <style> 한 덩어리로."""
     t = TOKENS
@@ -1890,8 +2191,12 @@ def build_css() -> str:
         _css_notice(t),
         _css_dev(t),
         _css_loading(t),
+        _css_save(t),
         # 좁은 화면 손질은 반드시 맨 뒤에. (같은 선택자를 이겨야 합니다)
         _css_mobile(t),
+        # 인쇄 손질은 그 뒤에. @media print 안이라 화면에는 영향이 없고,
+        # 화면용 규칙을 모두 이겨야 배경·색을 되돌릴 수 있습니다.
+        _css_print(t),
     ]
     # 웹폰트 <link> + 스타일을 한 덩어리로 돌려줍니다.
     return font_links() + "<style>\n" + "\n".join(blocks) + "\n</style>"
